@@ -1,0 +1,871 @@
+\chapter{Compilation}
+
+In the previous two chapters, we have shown the source language that we wish
+to express our programs in, and the target language that models the machine
+code that is actually used by the real computers to perform computations.
+
+In a way, those two languages are the complete opposites of each other:
+the first one is about composing functions, allows no side effects such
+as assignment and provides an implicit memory model. The other makes
+memory operations explicit, allows to exchange information solely with the
+use of assignment, and the only thinkable way of performing composition
+is by sequencing operations and subprograms.
+
+The transformation from the first sort of languages to the second
+has traditionally been called \textit{compilation}, and some of its
+popular techniques will be presented in this chapter.
+
+We shall begin with transforming Scheme programs into a special form
+that does not contain any nested function calls, and hence should be
+easier to transform to the program on our machine.
+ 
+\section{Continuation-Passing Style}
+
+Consider the following procedure for computing the coefficient
+$\Delta = b^2 - 4ac$ that is helpful in finding the roots of a quadratic
+equation $ax^2+bx+c=0$:
+
+\begin{Snippet}
+(define (delta a b c)
+  (- (* b b) (* 4 (* a c))))
+\end{Snippet}
+
+Prior to computing the value of the whole expression, we need
+to have our machine compute the values of sub-expression and
+store them somewhere.
+
+Provided that our machine has a sufficient number of registers,
+we could expect it to compile to the following sequence of machine
+instructions\footnote{Note that we use a new register to hold the
+  result of each intermediate computation. Of course, the real machines
+  usually have a limited number of registers, but the assumption
+  that each register is assigned exactly once leads to the form
+  of programs called \textit{Static Single-Assignment form} (or
+  SSA for short), which is used, for example, in the machine language
+  of the LLVM virtual machine.
+}:
+
+\begin{Snippet}
+  (bb <- b * b)
+  (ac <- a * c)
+  (4ac <- 4 * x2)
+  (bb-4ac <- x1 - x3)
+\end{Snippet}
+
+Let us now ask the opposite question: given a sequence of machine
+instructions, how can we express them in Scheme (or $\lambda$ calculus)?
+
+We typically imagine that a von Neumann machine operates by altering
+its current state (and indeed, this is how we implemented our virtual
+machine in Scheme).
+
+However, we could imagine that there is something quite different
+going on: each assignment to a register can be perceived not as
+actually altering some value, but as creating a new scope where
+the original variable has been shadowed with a new one (bound with
+the altered value), and where \textit{the rest of the program}
+is evaluated.
+
+In order to clarify things a bit, we can define an auxiliary
+function \texttt{pass} that takes a value and a procedure and
+simply passes the value to the procedure:
+\begin{Snippet}
+  (define (pass value procedure)
+    (procedure value))
+\end{Snippet}
+
+This way, we could rewrite programs like
+
+\begin{Snippet}
+  (bb <- b * b)
+  ... the rest of the program ...
+\end{Snippet}
+
+as
+
+\begin{Snippet}
+  (pass (* b b)
+    (lambda (bb)
+      ... the rest of the computation ...))
+\end{Snippet}
+
+The procedure that represents the rest of the computation has
+traditionally been called a \textit{continuation}, and the form
+of a program where control is passed explicitly to continuations
+is called \textit{continuation-passing style}\cite{SussmanSteele1976}.
+
+If we were to define our \texttt{delta} procedure using the
+continuation-passing style, we would need to extend its
+argument list with a continuation, i.e. a parameter that
+would explain what to do next with the value that our function
+has computed. Moreover, we could demand that all the functions
+that we use behave in the same way, i.e. that instead of the
+function \texttt{pass}, we would have functions \texttt{pass*}
+and \texttt{pass-} that would compute the values of operations
+\texttt{*} and \texttt{-} and pass them to their continuations.
+This way we make sure that there are no nested expressions
+in our program.
+
+\begin{Snippet}
+  (define (pass-delta a b c continuation)
+    (pass* b b
+      (lambda (bb)
+        (pass* a c
+          (lambda (ac)
+            (pass* 4 ac
+              (lambda (4ac)
+                (pass- bb 4ac
+                  (lambda (bb-4ac)
+                    (continuation bb-4ac))))))))))
+\end{Snippet}
+
+It should be rather clear that this form of representing programs
+isn't particularly handy, and should only be used as an intermediate
+or transient representation of a program.
+
+Of course, the above program is rather straightforward, as it consists
+only of a sequence of applications of primitive functions. To make
+the correspondence between continuation-passing style and normal
+Scheme programs more complete, we need to consider general function
+applications and conditional expressions.
+
+Let us consider the program that computes an \textit{absolute value}
+of a number. In Scheme, we would define it as
+
+\begin{Snippet}
+(define (abs n)
+  (if (is n >= 0)
+    n
+    (- n)))
+\end{Snippet}
+
+The corresponding machine code would look more or less like this:
+
+\begin{Snippet}
+  (if n >= 0 goto 2)
+  (n <- 0 - n)
+  ;; the rest of the program
+\end{Snippet}
+
+which in turn loosely corresponds to the following continuation-passing
+function
+
+\begin{Snippet}
+(define (pass-abs n continuation)
+  (if (>= n 0)
+    (continuation n)
+    (pass- 0 n continuation)))
+\end{Snippet}
+
+The above code was trivial in that it used the condition that is directly
+representable in our machine code. However in general we can place arbitrarily
+nested Scheme expressions as the \texttt{if}'s \texttt{<condition>} clauses.
+
+Continuations can also be used for returning multiple values. For example,
+the code finds the roots of a quadratic equations
+would need to check whether the discriminant $\Delta$ is non-negative
+in order to proceed with the computation of the roots:
+
+\begin{Snippet}
+  (define (quadratic-roots a b c)
+    (cond ((is (delta a b c) > 0)
+           (values (/ (- (- b) (sqrt (delta a b c))) (* 2 a))
+                   (/ (+ (- b) (sqrt (delta a b c))) (* 2 a))))
+          ((is (delta a b c) = 0)
+           (/ (- b) (* 2 a)))))
+\end{Snippet}
+
+Note that we have used the \texttt{values} form that is used in Scheme
+for returning multiple values. Although we didn't introduce it to be the
+part of our host language, its meaning in the context of the discussion
+regarding continuation-passing style is obvious (we simply pass more than
+one value to the continuation). Of course, we could have instead returned
+a list of values, which in turn would force us to fix on some particular
+representation of lists, which we want to avoid at this moment.
+
+Note also, that we defined \texttt{quadratic-roots} to return meaningful
+values only if the \texttt{delta} is either \texttt{zero?}
+or \texttt{positive?} -- that is, if it is negative, then the expression
+\texttt{quadratic-roots} has no values (or in other words, its value
+is \textit{unspecified}).
+
+Lastly, some readers may find it displeasing, that we didn't capture
+the value of \texttt{(delta a b c)} using the \texttt{let} form
+(which is something that we would normally do to avoid some redundant
+computations, and more specifically, not to repeat ourselves).
+We ask those readers to be forgiving, as our goal at this point
+is to demonstrate the correspondence between various Scheme programs
+and their CPS counterparts, rather than promote good programming
+practices. Or in other words, we are in the position of a surgeon
+performing an operation on a patient. Of course, it is in general
+good for health to jog, but it would be insane to recommend
+jogging to someone who is lying on an operation table with open
+veins.
+
+The computation of \texttt{quadratic-roots} is a bit tricky
+
+\begin{Snippet}
+  (define (pass-quadratic-roots a b c continuation)
+    (pass-delta a b c
+      (lambda (delta#1)
+        (if (> delta#1 0)
+          (pass-delta a b c
+            (lambda (delta#2)
+              (pass-sqrt delta#2
+                (lambda (sqrt@delta#3)
+                  (... (continuation -b-sqrt@delta/2a#6
+                                     -b+sqrt@delta/2a#11)
+                        ...)))))
+        ;else
+          (pass-delta a b c
+            (lambda (delta#12)
+              (if (= delta#12 0)
+                (pass- 0 b
+                  (lambda (-b#13)
+                    (pass* 2 a
+                      (lambda (2a#14)
+                        (pass/ -b#16 2a#14
+                          (lambda (-b/2a#15)
+                            (continuation -b/2a#15)))))))
+              ;else
+                (continuation))))))))
+\end{Snippet}
+
+Some (rather trivial) parts of the code for computing roots were
+omitted for clarity. It should be clear now that for complex conditions
+we simply compute the value of a condition, and then pass it to
+a continuation that takes the result and, depending on its value,
+either executes the CPS version of its \texttt{<then>} branch or
+the CPS version of its \texttt{<else>} branch.
+
+Note also, that -- in order to avoid accidental name clashes --
+we generated a new name for the result of each evaluated (or executed)
+expression.
+
+Let's now consider the following definition of the \texttt{factorial}
+function:
+\begin{Snippet}
+  (define (factorial n)
+    (if (= n 0)
+        1
+    ;else
+        (* n (factorial (- n 1)))))
+\end{Snippet}
+
+We can imagine that its continuation-passing version could
+look like this:
+
+\begin{Snippet}
+  (define (pass-factorial n continuation)
+    (if (= n 0)
+      (continuation 1)
+    ;else
+      (pass- n 1
+        (lambda (n-1)
+          (pass-factorial n-1
+            (lambda (n-1!)
+              (pass* n n-1!
+                (lambda (n*n-1!)
+                  (continuation n*n-1!)))))))))
+\end{Snippet}
+
+The questions that we need to ask are: (1) how do we transform
+arbitrary functional Scheme code to continuation passing style
+and (2) how do we transform continuation passing style program
+to machine code.
+
+\section{Conversion to Continuation-Passing Style}
+
+The meta-circular evaluator presented in chapter 2 performed
+case analysis on the shape of expression to be evaluated,
+and had to consider six cases: \texttt{lambda} form, \texttt{quote}
+form, \texttt{if} form, function application, symbols and
+numbers. It did not deal with the \texttt{define} form, as
+it could be expressed using \texttt{lambda} and fixed point
+combinators.
+
+For the purpose of conversion to continuation-passing style,
+we shall consider the \texttt{define} forms as well, because
+although they shouldn't be strictly necessary, the implementation
+of recursion in machine code is rather straightforward (certainly
+more so than of fixed point combinators).
+
+The core of the transformation is the \texttt{passing} function,
+which takes an expression and produces its continuation-passing
+counterpart.
+
+It takes an additional argument, a continuation expression, to
+which it shall pass the value of the transformed expression.
+
+In case of quoted values, it only invokes the continuation:
+
+\begin{Snippet}
+(define (passing expression continuation)
+  (match expression
+    (('quote _)
+     `(,continuation ,expression))
+\end{Snippet}
+
+The case of conditional expression is a bit trickier:
+we need to pass the value of a \textit{condition} to a new continuation,
+which -- depending on that value -- passes either the value
+of the \textit{then} branch, or the value of the \textit{else}
+branch to the original continuation. Note that we need to
+provide an original name for the result of the condition, to avoid
+accidental name clashes:
+
+\begin{Snippet}
+    (('if <condition> <then> <else>)
+     (let ((result (original-name <condition>)))
+       (passing <condition>
+         `(lambda (,result)
+	    (if ,result
+	        ,(passing <then> continuation)
+	        ,(passing <else> continuation))))))
+\end{Snippet}
+
+The continuation-passing version of the \texttt{lambda} form should receive
+additional argument -- a continuation -- and the body should be converted
+to the continuation-passing style\footnote{Although in this work we have
+  been consequently passing the continuation as the last argument for the
+  purpose of clarity, in practice it might be a better idea to make it
+  the first argument, because that would allow to handle variadic functions
+  properly.}. Since procedures are first-class values,
+they shall be passed to the original continuation just like quoted values.
+
+\begin{Snippet}
+    (('lambda <args> <body>)
+     `(,continuation (lambda (,@<args> return)
+                       ,(passing <body> 'return))))
+\end{Snippet}
+
+Function application is the trickiest bit: we need to compute the
+values of all the compound arguments, passing them to the subsequent
+continuations, which finally invoke the continuation-passing version
+of the called function (obtained using the \texttt{passing-function}
+function), passing its result to the original continuation\footnote{Note
+  that, for clarity of presentation, we depart from the definition
+  of Scheme in that we do not allow complex expression in the head
+  (function) position.}
+
+\begin{Snippet}
+    ((function . arguments)
+     (let ((simple-arguments (map (lambda (argument)
+				    (if (compound? argument)
+					(original-name argument)
+                                    ;else
+                                        argument))
+				  arguments)))
+       (passing-arguments arguments simple-arguments
+			  `(,(passing-function function)
+			    ,@simple-arguments
+			    ,continuation))))
+\end{Snippet}
+
+Otherwise, the expression is just a value to be passed to the continuation:
+
+\begin{Snippet}
+    (_
+     `(,continuation ,expression))))
+  ;; the definition of ``passing'' ends here
+\end{Snippet}
+
+The \texttt{passing-arguments} helper function (used for dealing with
+applications) takes three arguments: a list of arguments to the
+called function, a list of new names for the compound arguments,
+and a final call to be made from the nested chain of continuations:
+
+\begin{Snippet}
+(define (passing-arguments arguments names final)
+  (match arguments
+    (()
+     final)
+
+    ((argument . next)
+     (let (((name . names) names))
+       (if (compound? argument)
+	   (passing-arguments next names
+			      (passing argument
+                                `(lambda (,name) ,final)))
+       ;else
+	   (passing-arguments next names final))))))
+\end{Snippet}
+
+The \texttt{passing-program} function takes a program, that is,
+a sequence of definitions and an expression, and converts each of the
+definitions to the continuation-passing style. For the sake
+of simplicity, we shall assume here, that all the definitions
+are function definitions. Note that we need to pass the additional
+\texttt{return} argument that is stripped away after the conversion.
+
+We assume, that the program passes its result to the \texttt{exit}
+continuation.
+
+\begin{Snippet}
+(define (passing-program program)
+  (let (((('define names functions) ... expression) program))
+    `(,@(map (lambda (name function)
+               (let ((('return pass-function) (passing function
+                                                       'return)))
+	          `(define ,(passing-function name)
+                           ,pass-function)))
+	     names functions)
+      ,(passing expression 'exit))))
+\end{Snippet}
+
+The complete code, with the implementations of \texttt{passing-function}
+and \texttt{original-name} can be found in the appendix \ref{compiler}.
+
+We can check, that the value of
+
+\begin{Snippet}
+(passing-program '((define !
+                     (lambda (n)
+	               (if (= n 0)
+                           1
+			   (* n (! (- n 1))))))
+		    (! 5)))
+\end{Snippet}
+
+is the form
+
+\begin{Snippet}
+((define pass-!
+   (lambda (n return)
+     (pass= n 0
+       (lambda (n=0/1)
+         (if n=0/1
+            (return 1)
+         ;else
+            (pass- n 1
+	      (lambda (n-1/3)
+                (pass-! n-1/3
+		  (lambda (!/n-1/2)
+	            (pass* n !/n-1/2 return))))))))))
+ (pass-! 5 exit))
+\end{Snippet}
+
+\section{Generating machine code}
+
+Usually, function serves as an \textit{abstraction barrier} in
+complex systems: we sometimes imagine it as a black box that
+for some given input it produces some output. As such, functions
+are often perceived as \textit{compilation units}: a single function
+corresponds to a distinguished block of compiled code, along with its
+entry point.
+
+When designing an interface for the abstraction barrier on an actual
+system, we need to answer the following questions:
+\begin{itemize}
+\item How are the parameters passed on to a function?
+\item How are the values returned from a function?
+\end{itemize}
+
+On our machine, the possible answers are that arguments and
+values can either be passed through registers, through stack
+or through the memory heap.
+
+Typically, passing values through registers is most efficient
+and therefore most desirable. However, since the number of
+registers in a CPU is usually small, some other conventions
+often need to be established (for example, the first few
+arguments can be passed through registers, and another ones
+through the stack or heap).
+
+Another question is, how can a function know where the
+control should be transferred after it finishes its execution.
+Typically, this information is stored on the \textit{call stack},
+which stores the appropriate address in the caller code.
+
+However, while the use of stack is in general inevitable,
+sometimes it may be more desirable to store the return address
+in a register, and only save it when invoking another function
+(because this can decrease the number of memory accesses, which
+are typically more expensive than register access).
+
+The latter option, although may seem less obvious, allows to
+perceive function calls as gotos that pass arguments\cite{SussmanSteele1976},
+where the return address is just another argument to be passed.
+
+The advantage of this approach is that if a call to another
+function is the last thing that a calling function does, then
+the called function can simply inherit the return address
+from the caller. This trick is called \textit{Tail Call
+  Optimization} and allows, among other things, to 
+express loops using recursion.
+
+Let's recall our continuation-passing style version of the factorial
+function:
+
+\begin{Snippet}
+(define pass-!
+  (lambda (n return)
+    (pass= n 0
+      (lambda (n=0/1)
+        (if n=0/1
+           (return 1)
+        ;else
+           (pass- n 1
+             (lambda (n-1/3)
+               (pass-! n-1/3
+                 (lambda (!/n-1/2)
+                   (pass* n !/n-1/2 return/1))))))))))
+\end{Snippet}
+
+The function is recursive, but it is not tail recursive,
+because it calls another continuation from within the recursive
+call.
+
+We expect it to be transformed to something similar to the following
+assembly code:
+
+\begin{Snippet}
+  factorial:
+    (if n <> 0 goto else:)
+    (result <- 1)
+    (goto return)
+  else:
+    (n-1 <- n - 1)
+    (push n)
+    (push return)
+    (n <- n-1)
+    (return <- proceed:)
+    (goto factorial:)
+  proceed:
+    (pop return)
+    (pop n)
+    (n-1! <- result)
+    (n*n-1! <- n * n-1!)
+    (result <- n*n-1!)
+    (goto return)
+\end{Snippet}
+
+In addition to registers corresponding to the continuation arguments
+(i.e. \texttt{n}, \texttt{n-1}, \texttt{n-1!} and \texttt{n*n-1!}),
+there are two additional registers -- \texttt{return}, which stores
+the return address of current procedure, and \texttt{result}, which
+is used for passing the function's result to the caller.
+
+One can see that, prior to the recursive call, we had to store
+the return address on the stack and then restore it after the return
+from the call. We also had to save and restore the value of the
+\texttt{n} register, because it was used as an argument to the
+\texttt{factorial:} procedure, but its original value was used
+in the sequel of the procedure.
+
+Let's now consider the tail-recursive version of the procedure,
+which takes an additional argument -- the accumulator -- to store
+the result:
+
+\begin{Snippet}
+(define !+
+  (lambda (n a)
+    (if (= n 0)
+        a
+    ;else
+        (!+ (- n 1) (* n a)))))
+\end{Snippet}
+
+Its continuation-passing version looks like this
+
+\begin{Snippet}
+(define pass-!+
+   (lambda (n a return)
+     (pass= n 0
+       (lambda (n=0/1)
+         (if n=0/1
+           (return a)
+         ;else  
+           (pass* n a
+             (lambda (n*a/3)
+               (pass- n 1
+                 (lambda (n-1/2)
+                   (pass-!+ n-1/2 n*a/3 return))))))))))
+\end{Snippet}
+
+which in turn roughly corresponds to the following assembly code:
+
+\begin{Snippet}
+  factorial+:
+    (if n <> 0 goto else:)
+    (result <- a)
+    (goto return)
+  else:
+    (n*a <- n * a)
+    (n-1 <- n - 1)
+    (n <- n-1)
+    (a <- n*a)
+    (goto factorial+:)
+\end{Snippet}
+
+The code does not perform any stack operations, and it is clear
+that the function call is performed just as a simple goto with
+register assignment.
+
+Note that the calling function has to know the names of the registers
+that are used to pass arguments to the called function. It may also
+have to know what registers are used by the called function internally
+(including the registers used by all functions that are called by
+the called function, as well as registers used by the functions
+called by these functions, and so on) in order to know whether
+it should save their values on the stack before the call, and
+restore them afterwards.
+
+Also, the code generated by our procedure is wasteful with regard
+to the number of used registers. Normally, computers have a limited
+number of registers, and compilers try to reuse them as much as possible
+in order to minimize the number of accesses to RAM (which is typically
+much slower than manipulating register values).
+
+It would therefore be more realistic to rename the arguments to functions
+in a systematic way, and also minimize the number of registers that
+are used within a procedure (this process is called \textit{register
+allocation} in the literature\cite{WikipediaRegisterAllocation} \cite{Keep2013}).
+
+However, since these issues have very little to do with the merit of
+this work, we will proceed with our assumption, that the number of
+registers of our machine is sufficient to perform any computation
+we desire (which, at this very moment, is either computing a factorial
+or -- ultimately -- sorting an array).
+
+We therefore assume that each calling function knows at least the
+names of registers for each defined procedure, that will be available
+via \texttt{argument\--names} helper function.
+
+\begin{Snippet}
+(define (passing-program->assembly program/CPS)
+  (let (((('define names passing-functions)
+	  ...
+	  expression) program/CPS))
+
+    (define (argument-names function-name)
+      (any (lambda (name ('lambda (arguments ... return) . _))
+             (and (equal? name function-name)
+                  arguments))
+           names passing-functions))
+\end{Snippet}
+
+The main procedure, invoked recursively for each defined function,
+as well as for the main expression of the program, should be able
+to transform an expression in CPS form to a piece of assembly.
+
+There are actually only three cases that we need to consider:
+branching, invocation of a function, and returning a value. Since
+-- as we mentioned earlier -- upon invocation, the program
+may need to save the information contained in the registers
+whose content might be overwritten by a called function
+-- we need to track the registers used up to a given point.
+
+The code for returning a value to the continuation is rather
+trivial -- we assign the desired value to the \texttt{result}
+register and perform a jump to the address contained in the
+\texttt{return} register:
+
+\begin{Snippet}
+    (define (assembly expression/cps registers)
+      (match expression/cps
+        (('return value)
+         `((result <- ,value)
+           (goto return)))
+\end{Snippet}
+
+The code for branching is a bit tricky, as we need
+to undo some of the effects of our CPS transformation, to handle
+the conditionals properly (as we noted in chapter 2, Scheme
+provides Boolean values \texttt{\#true} and \texttt{\#false}, but
+here -- for simplicity -- we assume, that the instruction
+\texttt{(if a >?< b goto c)} can only be generated from the
+code of the form \texttt{(pass<?> a b (lambda (a<?>b) (if a<?>b ...)))}.
+Furthermore, to attain some readability, we shall inverse the
+condition in the comparison, and perform jump to the \texttt{else}
+branch). We use the \texttt{sign} function, which converts names
+like \texttt{pass=} or \texttt{pass+} to operators like \texttt{=}
+or \texttt{+}.
+
+We generate a new label for the \texttt{<else>} branch,
+add \texttt{a} and \texttt{b} to the set of used registers,
+generate a branching instruction followed by assembly
+for the \texttt{<then>} expression, followed by the label
+for the \texttt{<else>} branch, followed by machine code
+for the \texttt{<else>} expression.
+
+\begin{Snippet}
+        ((pass<?> a b ('lambda (a<?>b) ('if a<?>b
+                                            <then>
+                                            <else>)))
+          (let ((else (new-label 'else))
+                (registers (union registers
+                                  (maybe-register a)
+                                  (maybe-register b))))
+            `((if ,a ,(inversion (sign pass<?>)) ,b goto ,else)
+              ,@(assembly <then> registers)
+              ,else
+              ,@(assembly <else> registers))))
+\end{Snippet}
+
+For clarity, invocation should be handled by a separate
+function:
+
+\begin{Snippet}
+        ((operator . operands)
+         (call operator operands registers))))
+    ;; the definition of ``assembly'' ends here
+\end{Snippet}
+
+We need to take the following factors into consideration:
+\begin{itemize}
+\item whether the continuation is a \texttt{lambda} expression
+  or a \texttt{return} expression
+\item whether the current operator is primitive (like \texttt{pass+})
+  or a defined function (like \texttt{pass-factorial} from our
+  example), or a \texttt{lambda} expression (anonymous function)
+\end{itemize}
+
+\begin{Snippet}
+    (define (call operator operands registers)
+      (cond ((primitive-operator? operator)
+             (call-primitive operator operands registers))
+
+            ((defined-function? operator)
+             (call-defined operator operands registers))
+
+            ((anonymous-function? operator)
+             (call-anonymous operator operands registers))))
+\end{Snippet}
+
+``Calling'' a primitive operator is easy -- we simply transform
+it to assembly instruction, followed by the code generated from
+the body of the continuation (or a \texttt{(goto return)}
+instruction in the case of a call to the \texttt{return}
+continuation)
+
+\begin{Snippet}
+    (define (call-primitive operator operands registers)
+      (let (((left right continuation) operands))
+        (match continuation
+          (('lambda (result) body)
+           `((,result <- ,left ,(sign operator) ,right)
+             ,@(assembly body (union registers
+                                     (maybe-register left)
+                                     (maybe-register right)
+                                     `(,result)))))
+          (_ ;; a ``return'' continuation
+           `((result <- ,left ,(sign operator) ,right)
+             (goto ,continuation))))))
+\end{Snippet}
+
+In order to call a defined procedure, we need to save the
+arguments that we might be using in the future. At this stage,
+we could perform a fairly elaborate analysis to find out
+which registers that are used by our function after the call
+are overwritten by the called functions, and only save those.
+
+However -- again, for the sake of simplicity -- we shall only
+check, which registers are going to be needed after we return
+from the call (and we only do so if there's actually anything
+to be done after the return -- otherwise we should perform the
+tail call optimization).
+
+We save registers by performing a series of \texttt{push}
+instruction, and restore them by executing \texttt{pop}
+in the reverse order. 
+
+\begin{Snippet}
+    (define (call-defined function arguments registers)
+\end{Snippet}
+\begin{Snippet}
+      (define (save registers)
+        (map (lambda (register)
+               `(push ,register))
+             registers))
+\end{Snippet}
+\begin{Snippet}
+      (define (restore registers)
+        (map (lambda (register)
+               `(pop ,register))
+             (reverse registers)))
+\end{Snippet}
+\begin{Snippet}
+      (define (pass values function)
+        (let ((names (argument-names function)))
+          (map (lambda (name value)
+                 `(,name <- ,value))
+               names values)))
+\end{Snippet}
+\begin{Snippet}
+      ;; the body of ``call-defined'' begins here
+      (let (((arguments ... continuation) arguments)
+            (entry (passing-function-label function)))
+\end{Snippet}
+\begin{Snippet}
+        (match continuation
+          (('lambda (result) body)
+           (let* ((proceed (new-label 'proceed))
+                  (sequel (assembly body registers))
+                  (registers (intersection registers
+                                  (used-registers sequel))))
+             `(,@(save registers)
+               ,@(pass arguments function)
+	       (push return)
+	       (return <- ,proceed)
+               (goto ,entry)
+               ,proceed
+	       (pop return)
+               ,@(restore registers)
+               ,@sequel)))
+\end{Snippet}
+\begin{Snippet}
+          (_ ;; tail call optimization
+           `(,@(pass arguments function)
+	     (goto ,(passing-function-label function)))))))
+\end{Snippet}
+
+Given all these helper functions, we can now express the
+compilation of a whole program\footnote{
+  A careful reader probably noticed that we're lacking
+  the definitions of \texttt{anonymous-function?} and
+  \texttt{call-anonymous}. These definitions are trivial,
+  as the call to anonymous function boils down to register
+  assignment followed by execution of assembly code of the
+  body of that function. They would contribute nothing
+  to the examples presented here, so we allowed ourselves
+  to omit them here. They are of course available in the
+  appendix \ref{compiler}.
+}. As noted earlier, we assume
+that a program is a sequence of function definitions followed
+by a single expression. We therefore need to compile both the
+definitions and the expression. Furthermore, we need to
+take into account what should happen after our program finishes
+its execution. Obviously, we want our machine to \texttt{halt}.
+
+\begin{Snippet}
+    ;; body of ``passing-program->assembly'' begins here
+    `((return <- end:)
+      ,@(assembly expression '())
+      ,@(append-map (lambda (name ('lambda args body))
+		      `(,(passing-function-label name)
+			,@(assembly body '())))
+		    names passing-functions)
+      end:
+      (halt))))
+    ;; the definition of ``passing-program->assembly'' ends here
+\end{Snippet}
+
+We can observe that the programs for computing factorial function
+behave roughly as we expected them to: the tail recursive version
+does not perform any stack operations and only uses \texttt{goto}
+to transfer control. The other version saves the \texttt{return}
+register on the stack prior to the call, along with other registers
+that are needed in the sequel.
+
+\section{Conclusion}
+
+Although the compiler presented in this chapter successfully transforms
+some high level functions to efficient machine code, it is of course
+by no means complete. It does not handle higher order functions properly,
+nor does it support arbitrary precision arithmetic. Moreover,
+it does not perform any register allocation and uses a new register
+for storing each intermediate result, which makes it inapplicable
+to real machines. It does, however, serve its purpose, in that it
+gives a rough overview of the compilation process.
+

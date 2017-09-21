@@ -1,0 +1,527 @@
+\chapter{Macro expansion} \label{expander}
+
+Prior to evaluation, we need to convert all the special forms like
+\texttt{let} or \texttt{and} into a program consisting solely
+of primitive forms \texttt{lambda} and \texttt{if}.
+
+The R$^5$RS specification of Scheme provides a special language
+for defining new syntactic extensions, called \texttt{syntax-rules}.
+
+While there are free implementations available, we believe that
+it is too complex for our purpose. Instead we are going to propose
+a language that is similar but slightly simpler.
+
+As in the case of \texttt{syntax-rules}, we shall be writing down
+our macros using patterns and templates. For example, we'd like to
+be able to define the core Scheme macros in the following way:
+
+\begin{Snippet}
+(define core-macros
+  '((('let ((name value) ...)
+       . body)
+     (('lambda (name ...) . body) value ...))
+\end{Snippet}  
+\begin{Snippet}
+    (('let* () . body)
+     ('begin . body))
+\end{Snippet}  
+\begin{Snippet}    
+    (('let* ((name-1 value-1)
+	     (name-2 value-2) ...)
+       . body)
+     ('let ((name-1 value-1))
+       ('let* ((name-2 value-2) ...)
+         . body)))
+\end{Snippet}
+\begin{Snippet}
+    (('and)
+     #true)
+\end{Snippet}  
+\begin{Snippet}
+    (('and last)
+     last)
+\end{Snippet}  
+\begin{Snippet}
+    (('and first . rest)
+     ('if first ('and . rest) #false))
+\end{Snippet}  
+\begin{Snippet}
+    (('or)
+     #false)
+\end{Snippet}  
+\begin{Snippet}
+    (('or last)
+     last)
+\end{Snippet}  
+\begin{Snippet}
+    (('or first . rest)
+     ('let ((result first))
+       ('if result result ('or . rest))))))
+\end{Snippet}
+
+\section{Binding patterns}
+
+In order to be able to apply these macros, we need to be able to \textit{bind}
+patterns to forms. We are going to represent a binding using an association
+list (if there is no binding, we expect the function to return \texttt{\#false}).
+We expect that
+\begin{Snippet}
+  (e.g. (same-sets? (bind '('let ((names values) ...) . body)
+                          '(let ((a 5) (b 10)) (+ a b)))
+                    '((names a b) (values 5 10) (body (+ a b)))))
+\end{Snippet}
+and that
+\begin{Snippet}
+  (e.g. (not (bind '(a b c) '(1 2))))
+\end{Snippet}
+
+From the examples above one can infer the following:
+\begin{enumerate}
+\item literals are represented using \texttt{quote}d symbols,
+\item variables are represented using regular symbols,
+\item the \texttt{...} symbol has a special meaning: it is used
+  to represent a repetition of zero or more forms that precede it.
+  Consequently, it causes symbols to capture lists of values,
+  rather than individual values.
+\end{enumerate}
+
+If a symbol appears more than once in the pattern, we expect both
+occurrences to be \texttt{equal?}.
+
+\begin{Snippet}
+  (e.g. (bind '(a b a) '(1 2 1)))
+\end{Snippet}
+
+but
+
+\begin{Snippet}
+  (e.g. (not (bind '(a b a) '(1 2 3))))
+\end{Snippet}
+
+The code here is heavily inspired by the implementation from \cite{Norvig1992}.
+
+\begin{Snippet}
+  (define (bind pattern #;to form . bound-variables)
+    (match pattern
+      (('quote literal)
+       (and (equal? form literal)
+            bound-variables))
+\end{Snippet}
+\begin{Snippet}
+      ((repetition '... . remaining)
+       (bind-sequence repetition remaining form
+                      bound-variables))
+\end{Snippet}
+\begin{Snippet}
+      ((head/pattern . tail/pattern)
+       (match form
+         ((head/form . tail/form)
+          (let ((bound (apply bind head/pattern head/form
+                              bound-variables)))
+            (and bound
+                 (apply bind tail/pattern tail/form bound))))
+         (_
+          #false)))
+\end{Snippet}  
+\begin{Snippet}
+      (_
+       (if (symbol? pattern)
+         (merge-bindings `((,pattern . ,form) bound-variables))
+       ;else
+         (and (equal? pattern form)
+              bound-variables)))))
+\end{Snippet}  
+where
+\begin{Snippet}
+  (define (merge-bindings bindings . bindings*)
+    (define (merge-bindings a b)
+      (and a b
+           (fold-left (lambda (bindings (key . value))
+                        (and bindings
+                             (cond ((assoc key bindings)
+                                    => (lambda ((key . value*))
+                                         (and (equal? value value*)
+                                              bindings)))
+                                   (else
+                                    `((,key . ,value)
+                                      . ,bindings)))))
+                      a
+                      b)))
+    (fold-left merge-bindings bindings bindings*))
+\end{Snippet}
+
+We have used the feature of the \texttt{cond} variable that we didn't
+describe in chapter 2: if the condition is followed by the \texttt{=>}
+symbol, then the following expression must be a function of one argument.
+
+If the value of the condition is other than \texttt{\#false}, then it
+is passed to that function, yielding the value of the \texttt{cond}
+expression.
+
+As we can see, the definition of \texttt{bind} is rather
+straightforward: we must only consider seven cases. The first one is the
+occurrence of a literal, which is compared using \texttt{equal?}.
+
+The second is a pattern followed by an ellipsis. Since it is a bit
+complex, it is handled by a separate function called \texttt{bind\--sequence}
+that is explained below \footnote{
+  Although we wrote the pattern as \texttt{(repeated '...\,\,.\,\,remaining)},
+  the \texttt{match} macro that we used to write this code doesn't treat
+  the quoted ellipses properly. Instead, in the actual code we had to
+  resort to the feature called \textit{guarded patterns}: instead
+  of \texttt{'...}, we wrote \texttt{(?\,\,...?)}, where 
+  \texttt{(define (...?\,\,x) (eq?\,\,x '...))}.
+}.
+
+The third is when pattern is a pair. In this case, the form being
+pattern-matched must also be a pair, and we should be able to bind
+the head of the pattern with the head of the form, and the tail
+of the pattern with the tail of the form, unifying the bindings.
+
+Otherwise, the pattern is either a literal (such as a number)
+or a symbol. If it is a literal, it is compared with the form
+using the \texttt{equal?} predicate. Otherwise it may either
+either be bound or unbound. If it is bound, then form must
+be \texttt{equal?} to the bound value. Otherwise, a new binding
+is added to the \texttt{bound-variables}.
+
+Adding support for ellipses is a bit tricky. When we encounter the
+\texttt{...} symbol, we need to make sure that we're both able to
+match some prefix of the form so that each element matches
+the pattern preceding the \texttt{...} symbol, and that the part
+of the form that didn't get into the prefix matches the remainder
+of the pattern.
+
+The \texttt{bind-sequence} function will need to call \texttt{bind}
+recursively on some prefix of the form being pattern-matched, and
+then zip the resulting bindings (note that the \texttt{zip-bindings}
+function requires that the order of bindings is the same
+for each invocation of \texttt{bind})
+
+\begin{Snippet}
+  (define (zip-bindings list-of-bindings)
+    (match list-of-bindings
+      ((((names . values) ...) ...)
+       (assert (apply eq? names))
+       (match names
+         ((names . _)
+          (apply map list names values))
+         (()
+	  '())))))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+   (zip-bindings '(((a . 1) (b . 2) (c . 3))
+		   ((a . 4) (b . 5) (c . 6))
+		   ((a . 7) (b . 8) (c . 9))))
+   ===> ((a 1 4 7) (b 2 5 8) (c 3 6 9)))
+\end{Snippet}
+
+Since -- as we mentioned earlier -- the presence of ellipses may cause
+ambiguous match, we are going to need to test various possible matches,
+until we find the satisfying one.
+
+\begin{Snippet}
+  (define (bind-sequence repeated-pattern remaining-pattern
+                         form bound-variables)
+    (define (successful-match? prefix suffix)
+      (let* ((bindings (map (lambda (form)
+                              (bind repeated-pattern form))
+                            prefix))
+             (zipped (zip-bindings bindings))
+             (merged (merge-bindings bound-variables zipped)))
+        (and merged (apply bind remaining-pattern suffix
+                                merged))))
+                            
+    (let* ((limit (prefix-length (lambda (constituent)
+				   (bind repeated-pattern
+				         constituent))
+			          form))
+	   (prefix rest (split-at form limit)))
+      (carry #;from prefix #;to rest
+             #;until successful-match?)))
+\end{Snippet}
+
+The \texttt{carry} function is used for testing smaller and smaller
+prefixes (and -- accordingly -- longer and longer suffixes) until
+it finds a division that satisfies the condition:
+
+\begin{Snippet}
+  (define (carry #;from prefix #;to suffix #;until success?)
+    (let ((result (success? prefix suffix)))
+      (if (or result (null? prefix))
+	  result
+      ;else
+	  (let (((initial ... last) prefix))
+	    (carry #;from initial #;to `(,last . ,suffix)
+			  #;until success?)))))
+\end{Snippet}
+
+The \texttt{prefix-length} function returns the number of initial
+elements on the list that satisfy a given condition:
+
+\begin{Snippet}
+  (define (prefix-length condition? l)
+    (define (traverse l n)
+      (match l
+        ((head . tail)
+         (if (condition? head)
+	     (traverse tail (+ n 1))
+         ;else
+             n))
+        (_
+         n)))
+    (traverse l 0))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+    (prefix-length even? '(2 4 6 7 8 9)) ===> 3)
+\end{Snippet}
+
+\section{Filling templates}
+
+Once the pattern is matched and the appropriate names are associated
+with corresponding values, the association can be used for filling
+templates.
+
+We wish that the patterns and templates are symmetrical: if a quoted
+symbol appears in the template, it should be transformed into literal
+symbol. Otherwise if a bound symbol appears on the association list,
+then it should be replaced with the associated value.
+
+An interesting case is when a symbol is not quoted, and it does not
+appear on the association list: drawing inspiration from \texttt{syntax\--rules},
+we replace it with a new symbol that is guaranteed not to clash with
+any other symbol used in the program.
+
+For this reason, we need to be able to identify all the symbols
+that are used in the template:
+
+\begin{Snippet}
+  (define (used-symbols expression)
+    (match expression
+      (('quote literal)
+       '())
+\end{Snippet}
+\begin{Snippet}
+      ((repeated '... . rest)
+       (union (used-symbols repeated)
+	      (used-symbols rest)))
+\end{Snippet}
+\begin{Snippet}
+      ((head . tail)
+       (union (used-symbols head)
+	      (used-symbols tail)))
+\end{Snippet}
+\begin{Snippet}
+      (_ 
+       (if (symbol? expression)
+	   `(,expression)
+       ;else
+	   '()))))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (same-sets? (used-symbols '(a ... a b ... c 'c 'd))
+                    '(a b c)))
+\end{Snippet}
+
+We can extend the bindings to be filled in a template
+with mappings from the used symbols that are not bound
+to freshly generated symbols (that are guaranteed to be
+distinct from every other symbol present in the program):
+
+\begin{Snippet}
+(define (fill template #;with bindings)
+  (let* ((missing (difference (used-symbols template)
+			      (map (lambda ((key . value))
+				     key)
+				   bindings)))
+	 (bindings `(,@(map (lambda (symbol)
+			      `(,symbol . ,(unique-symbol symbol)))
+			    missing) ,@bindings)))
+    (fill-template template bindings)))
+\end{Snippet}
+
+The \texttt{used-symbols} can be used to generate missing
+bindings while filling the template:
+
+\begin{Snippet}
+  (define (fill-template template #;with bindings)
+    (match template
+      (('quote literal)
+       literal)
+\end{Snippet}
+\begin{Snippet}
+    ((repeated '... . rest)
+     `(,@(fill-sequence repeated bindings)
+       . ,(fill-template rest #;with bindings)))
+\end{Snippet}
+\begin{Snippet}
+    ((head . tail)
+     `(,(fill-template head #;with bindings)
+       . ,(fill-template tail #;with bindings)))
+\end{Snippet}
+\begin{Snippet}
+    (_
+     (cond ((and (symbol? template)
+                 (assoc template bindings))
+            => (lambda ((key . value))
+                 value))
+\end{Snippet}
+\begin{Snippet}
+           (else
+            template)))))
+\end{Snippet}
+
+As before, the most difficult part is the treatment of ellipses. Given
+a template that is followed by an ellipsis, we need to identify all
+the symbols that appear in that template (but we do not count symbols
+which are quoted):
+
+Subsequently, we need to be able to unzip symbols that appear
+in patterns directly preceding the ellipsis. To be more precise,
+we need to convert bindings into a sequence of bindings:
+
+\begin{Snippet}
+(define (unzip-bindings bindings keys)
+  (let* ((unzipped (filter (lambda ((key . value))
+			     (is key member keys))
+			   bindings))
+	 (((names . values) ...) unzipped))
+    (map (lambda (singular-values)
+	   `(,@(map (lambda (name value)
+		      `(,name . ,value))
+		    names singular-values)
+	     ,@bindings))
+	 (transpose values))))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+   (unzip-bindings '((a 1 2 3) (b 1 2 3) (c 1 2 3) (d . 4)) '(a c e))
+    ===> (((a . 1) (c . 1) (a 1 2 3) (b 1 2 3) (c 1 2 3) (d . 4))
+          ((a . 2) (c . 2) (a 1 2 3) (b 1 2 3) (c 1 2 3) (d . 4))
+          ((a . 3) (c . 3) (a 1 2 3) (b 1 2 3) (c 1 2 3) (d . 4))))
+\end{Snippet}
+
+where \texttt{transpose} can be defined as
+
+\begin{Snippet}
+  (define (transpose list-of-lists)
+    (if (null? list-of-lists)
+       '()
+    ;else
+       (apply map list list-of-lists)))
+\end{Snippet}
+\begin{Snippet}
+  (e.g. (transpose '((1 2 3)
+                     (4 5 6))) ===> ((1 4)
+                                     (2 5)
+                                     (3 6)))
+\end{Snippet}
+
+Given these two operations, filling a sequence is rather
+straightforward:
+
+\begin{Snippet}
+  (define (fill-sequence template bindings)
+    (let* ((symbols (used-symbols template))
+	   (binding-sequences (unzip-bindings bindings symbols)))
+      (map (lambda (bindings)
+	     (fill-template template bindings))
+	   binding-sequences)))
+\end{Snippet}
+
+\section{Expansion}
+
+Having \texttt{bind} and \texttt{fill}, we can now construct our expander:
+
+\begin{Snippet}
+(define (expand expression macros)
+  
+  (define (transform expression)
+    (let ((result (any (lambda ((pattern template))
+			 (let ((bindings (bind pattern
+					       expression)))
+			   (and bindings
+				`(,bindings ,template))))
+		       macros)))
+      (match result
+	((bindings template)
+	 (fill template bindings))
+
+	(_
+	 expression))))
+\end{Snippet}
+\begin{Snippet}
+  (define (expand expression)
+    (match expression
+      (('quote _)
+       expression)
+\end{Snippet}
+\begin{Snippet}
+      (('lambda args body)
+       `(lambda ,args ,(expand body)))
+\end{Snippet}
+\begin{Snippet}
+      (('if condition then else)
+       `(if ,(expand condition)
+	    ,(expand then)
+	    ,(expand else)))
+\end{Snippet}
+\begin{Snippet}
+      ((operator . operands)
+       (let ((transformed (fix transform expression)))
+	 (if (equal? expression transformed)
+	     `(,(expand operator) . ,(map expand operands))
+         ;else
+             (expand transformed))))
+\end{Snippet}
+\begin{Snippet}
+      (_
+       expression)))
+
+  (expand expression))
+\end{Snippet}
+
+where \texttt{fix} is defined to iterate until reaching a fixed point:
+
+\begin{Snippet}
+  (define (fix function argument)
+    (let ((value (function argument)))
+      (if (equal? value argument)
+          value
+      ;else
+          (fix function value))))
+\end{Snippet}
+
+Given the definition of \texttt{core-macros} provided at the beginning
+of this appendix, we can see that
+
+\begin{Snippet}
+(e.g.
+  (expand '(let* ((a 5) (b (* a 2)))
+	    (or (> a b)
+		(+ a b)))
+	 core-macros) ===> ((lambda (a)
+                              ((lambda (b)
+                                 (begin
+                                   ((lambda (##result#1)
+                                      (if ##result#1
+                                          ##result#1
+                                          (+ a b)))
+                                     (> a b))))
+                               (* a 2)))
+                            5))
+\end{Snippet}
+
+One can see ha there's a symmetry between the patterns and the templates
+in the definition of \texttt{core-macros}. This could prompt someone to
+equip the \texttt{expand} function with the facility of reverting the
+expansion.
+
+We have indeed made a successful attempt in this direction, although it
+wasn't mature enough to incorporate it here.

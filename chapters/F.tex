@@ -1,0 +1,190 @@
+\chapter{Overriding the core Scheme bindings}
+
+Readers who are familiar with the Scheme programming language
+probably noticed that the way it has been used in this work
+deviates from the standards defined in \cite{R5RS} and \cite{R6RS}
+because of the destructuring that can be performed in \texttt{lambda},
+\texttt{let} and \texttt{let*} forms, as well as the possibility
+of creating \textit{curried definitions} using the \texttt{define} form.
+
+Since \texttt{define} and \texttt{lambda} forms are actually the core
+bindings, they cannot be in principle redefined. However, module systems
+present in some Scheme implementations allow to shadow the core bindings
+with some user-defined ones.
+
+This section shows how this can be done with the module system
+available in Guile. The pattern matching is performed using the
+\texttt{(ice-9 match)} module that is shipped with Guile. It is
+a subset of the \texttt{(grand scheme)} glossary which is maintained
+by the author of this work\footnote{\url{https://github.com/plande/grand-scheme}}.
+
+\begin{Snippet}
+(define-module (grand syntax)
+  #:use-module (ice-9 match)
+  #:use-module (srfi srfi-1)
+  #:re-export (match)
+  #:export (primitive-lambda)
+  #:replace ((cdefine . define)
+	     (mlambda . lambda)
+	     (named-match-let-values . let)
+	     (match-let*-values . let*)))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax mlambda
+  (lambda (stx)
+    (syntax-case stx ()
+\end{Snippet}
+\begin{Snippet}
+      ((_ (first-arg ... last-arg . rest-args) . body)
+       (and (every identifier? #'(first-arg ... last-arg))
+	    (or (identifier? #'rest-args) (null? #'rest-args)))
+       #'(lambda (first-arg ... last-arg . rest-args) . body))
+\end{Snippet}
+\begin{Snippet}
+      ((_ arg body ...)
+       (or (identifier? #'arg) (null? #'arg))
+       #'(lambda arg body ...))
+\end{Snippet}
+\begin{Snippet}
+      ((_ args body ...)
+       #'(match-lambda* (args body ...) 
+        (_ (error 'mlambda (current-source-location)
+                  '(args body ...)))))
+      )))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax primitive-lambda
+  (syntax-rules ()
+    ((_ . whatever)
+     (lambda . whatever))))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax cdefine
+  (syntax-rules ()
+    ((_ ((head . tail) . args) body ...)
+     (cdefine (head . tail)
+       (mlambda args body ...)))
+    ((_ (name . args) body ...)
+     (define name (mlambda args body ...)))
+    ((_ . rest)
+     (define . rest))
+    ))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax match-let/error
+  (syntax-rules ()
+    ((_ ((structure expression) ...)
+	body + ...)
+     ((match-lambda* ((structure ...) body + ...)
+	(_ (error 'match-let/error (current-source-location) 
+		  '((structure expression) ...)
+		  expression ...)))
+      expression ...))))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax named-match-let-values
+  (lambda (stx)
+    (syntax-case stx ()
+      ((_ ((identifier expression) ...) ;; optimization: plain "let" form
+	  body + ...)
+       (every identifier? #'(identifier ...))
+       #'(let ((identifier expression) ...)
+	   body + ...))
+\end{Snippet}
+\begin{Snippet}
+      ((_ name ((identifier expression) ...) ;; optimization: regular named-let
+	  body + ...)
+       (and (identifier? #'name) (every identifier? #'(identifier ...)))
+       #'(let name ((identifier expression) ...)
+	  body + ...))
+\end{Snippet}
+\begin{Snippet}
+      ((_ name ((structure expression) ...)
+	  body + ...)
+       (identifier? #'name)
+       #'(letrec ((name (mlambda (structure ...) body + ...)))
+	   (name expression ...)))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((structure expression) ...)
+	  body + ...)
+       #'(match-let/error ((structure expression) ...) 
+			  body + ...))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((identifier identifiers ... expression)) body + ...)
+       (every identifier? #'(identifier identifiers ...))
+       #'(call-with-values (lambda () expression)
+	   (lambda (identifier identifiers ... . _)
+	     body + ...)))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((structure structures ... expression)) body + ...)
+       #'(call-with-values (lambda () expression)
+	   (match-lambda* 
+	       ((structure structures ... . _) body + ...)
+	     (_ (error 'named-match-let-values 
+		       (current-source-location)
+		       'name)))))
+\end{Snippet}
+\begin{Snippet}
+      ((_ name ((identifier identifiers ... expression) body + ...))
+       (and (identifier? #'name)
+	    (every identifier? #'(identifier identifiers ...)))
+       #'(let ((name (lambda (identifier identifiers ...) body + ...)))
+	   (call-with-values (lambda () expression) name)))
+\end{Snippet}
+\begin{Snippet}
+      ((_ name ((structure structures ... expression) body + ...))
+       (identifier? #'name)
+       #'(let ((name (match-lambda* ((structure structures ...) body + ...)
+		       (_ (error 'named-match-let-values
+				 (current-source-location)
+				 'name)))))
+	   (call-with-values (lambda () expression) name))))))
+\end{Snippet}
+\begin{Snippet}
+(define-syntax match-let*-values
+  (lambda (stx)
+    (syntax-case stx ()
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((identifier expression) ...) ;; optimization: regular let*
+	  body + ...)
+       (every identifier? #'(identifier ...))
+       #'(let* ((identifier expression) ...)
+	   body + ...))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((identifier expression) remaining-bindings ...)
+	  body + ...)
+       (identifier? #'identifier)
+       #'(let ((identifier expression))
+	   (match-let*-values (remaining-bindings ...) body + ...)))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((structure expression) remaining-bindings ...)
+	  body + ...)
+       #'(match-let/error ((structure expression))
+			  (match-let*-values (remaining-bindings ...) 
+					     body + ...)))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((identifier identifiers ... expression) remaining-bindings ...)
+	  body + ...)
+       (every identifier? #'(identifier identifiers ...))
+       #'(call-with-values (lambda () expression) 
+	   (lambda (identifier identifiers ... . _)
+	     (match-let*-values (remaining-bindings ...) 
+				body + ...))))
+\end{Snippet}
+\begin{Snippet}
+      ((_ ((structure structures ... expression) remaining-bindings ...)
+	  body + ...)
+       #'(call-with-values (lambda () expression) 
+	   (match-lambda* ((structure structures ... . _)
+			   (match-let*-values (remaining-bindings ...) 
+					      body + ...))
+	     (_ (error 'match-let*-values (current-source-location))))))
+      )))
+\end{Snippet}

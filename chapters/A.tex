@@ -1,0 +1,204 @@
+\chapter{Non-standard functions} \label{non-standard-functions}
+
+For the purpose of reference, we provide the definitions of non-standard
+functions that were described in chapter 2. The \texttt{e.g.}\,\,form
+can be treated as a comment (although it could also be used to express
+unit tests in actual programs).
+
+\begin{Snippet}
+  (define (fold-left op e . ls)
+    (match ls
+      (((heads . tails) ...)
+       (apply fold-left op (apply op e heads) tails))
+      (_
+       e)))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (fold-right op e . ls)
+    (match ls
+      (((heads . tails) ...)
+       (apply op `(,@heads ,(apply fold-right op e tails))))
+      (_
+       e)))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (every property? . ls)
+    (apply fold-left (lambda (result . elements)
+                       (and result (apply property? elements)))
+                     #true
+                     ls))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (and (every even? '(2 4 6))
+             (not (every even? '(1 2 3)))))
+\end{Snippet}
+
+
+\begin{Snippet}
+  (define (any property? . ls)
+    (apply fold-left (lambda (result . elements)
+                       (or result (apply property? elements)))
+                     #false
+                     ls))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (and (any even? '(1 2 3))
+             (not (any even? '(1 3 5)))))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (member element set)
+    (any (is _ equal? element) set))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (is 2 member '(1 2 3)))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (subset? x y)
+    (every (is _ member y) x))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (and (is '(1 2 3) subset? '(5 4 3 2 1))
+             (isnt '(0 1 2) subset? '(2 3 4))))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (same-sets? set . sets)
+    (define (same-set? a b)
+      (and (is a subset? b)
+           (is b subset? a)))
+    (every (is _ same-set? set) sets))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (and (same-sets? '(1 2 3) '(3 1 2))
+             (not (same-sets? '(1 2 3) '(1 2 3 4)))))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (union set . sets)
+    (define (union a b)
+      (fold-left (lambda (set element)
+		   (if (is element member set)
+		       set
+		       `(,element . ,set)))
+	         a
+	         b))
+  (fold-left union set sets))
+\end{Snippet}
+
+\begin{Snippet}
+(e.g. (same-sets? (union '(1 2 3) '(2 3 4)) '(1 2 3 4)))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (intersection set . sets)
+    (define (intersection a b)
+      (fold-left (lambda (set element)
+		   (if (is element member a)
+		       `(,element . ,set)
+		       set))
+	         '()
+	         b))
+    (fold-left intersection set sets))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (same-sets? (intersection '(1 2 3) '(2 3 4)) '(2 3)))
+\end{Snippet}
+
+The \texttt{for} loop used in chapter 3 is a macro that could
+be defined in the following way:
+
+\begin{Snippet}
+  (define-syntax for
+    (syntax-rules (in)
+      ((for element in sequence . actions)
+       (for-each (lambda (element) . actions)
+                 sequence))))
+\end{Snippet}
+
+where \texttt{for-each} is defined as
+
+\begin{Snippet}
+  (define (for-each action list)
+    (unless (null? list)
+      (action (car list))
+      (for-each action (cdr list))))
+\end{Snippet}
+
+The \texttt{range} function can be defined as
+
+\begin{Snippet}
+  (define (range start end)
+    (if (is start > end)
+        '()
+        `(,start . ,(range (+ start 1) end))))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+   (range 1 10)
+    ===> (1 2 3 4 5 6 7 8 9 10))
+\end{Snippet}
+
+\begin{Snippet}
+  (define ((number/base base) list)
+    (fold-left (lambda (number digit)
+                 (+ (* number base) digit))
+               0
+               list))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+    ((number/base 2) '(1 0 0)) ===> 4
+    ((number/base 10) '(1 0 0)) ===> 100)
+\end{Snippet}
+
+\begin{Snippet}
+  (define ((digits/base base) number)
+    (define (divide number digits)
+      (if (= number 0)
+          digits
+      ;else
+          (divide (quotient number base)
+                  `(,(modulo number base) . ,digits))))
+    (divide number '()))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g.
+   ((digits/base 2) 4) ===> '(1 0 0)
+   ((digits/base 10) 140) ===> '(1 4 0))
+\end{Snippet}
+
+\begin{Snippet}
+  (define (extend-left list size fill)
+    (assert (is (length list) <= size))
+    (if (is (length list) < size)
+        (extend-left `(,fill . ,list) size fill)
+    ;else
+        list))
+\end{Snippet}
+
+\begin{Snippet}
+  (e.g. (extend-left '(1 2 3) 5 0) ===> (0 0 1 2 3))
+\end{Snippet}
+
+  
+The \texttt{machine-word-bytes} function used to implement the virtual
+machine from chapter 3 can be defined as follows (given some definite
+value of \texttt{MACHINE-WORD-SIZE}):
+
+\begin{Snippet}
+  (define (machine-word-bytes value)
+    (extend-left ((digits/base 256) value) MACHINE-WORD-SIZE 0))
+\end{Snippet}

@@ -1,0 +1,495 @@
+\chapter{The compiler} \label{compiler}
+
+Below is the full source code of the compiler from chapter 4. It has
+been tested with Guile 2.0.11\footnote{\url{https://www.gnu.org/software/guile/}}.
+
+\begin{Snippet}
+(use-modules (grand scheme) (grand symbol) (srfi srfi-88))
+\end{Snippet}
+\begin{Snippet}
+
+(define primitive-operators
+  '((+ pass+)
+    (- pass-)
+    (* pass*)
+    (/ pass/)
+    (% pass%)
+    (&& pass&&)
+    (|| pass||)
+    (^ pass^)
+    (<< pass<<)
+    (>> pass>>)
+    (= pass=)
+    (< pass<)
+    (<= pass<=)
+    (<> pass<>)
+    (>= pass>=)
+    (> pass>)))
+\end{Snippet}
+\begin{Snippet}
+(define (comparison? operator)
+  (any (lambda ((left right))
+	 (or (equal? operator left)
+	     (equal? operator right)))
+       mutually-negating-comparisons))
+\end{Snippet}
+\begin{Snippet}
+(define (compound? expression)
+  (pair? expression))
+\end{Snippet}
+\begin{Snippet}
+(define mutually-negating-comparisons
+  '((< >=)
+    (<= >)
+    (= <>)))
+\end{Snippet}
+\begin{Snippet}
+(define (primitive-operator? operator)
+  (any (lambda ((primop passing-function))
+	 (equal? operator primop))
+       primitive-operators))
+\end{Snippet}
+\begin{Snippet}
+(define (inversion comparison)
+  (any (lambda ((left right))
+	 (or (and (equal? left comparison)
+		  right)
+	     (and (equal? right comparison)
+		  left)))
+       mutually-negating-comparisons))
+\end{Snippet}
+\begin{Snippet}
+(define (passing-function function-name)
+  (or (any (lambda ((operator passing-name))
+	     (and (equal? operator function-name)
+		  passing-name))
+	   primitive-operators)
+      (and (comparison? function-name)
+	   (symbol-append 'pass function-name))
+      (symbol-append 'pass- function-name)))
+\end{Snippet}
+\begin{Snippet}
+(define (expression-name expression)
+  (match expression
+    ((head . tail)
+     (if (or (primitive-operator? head)
+	     (comparison? head))
+	 (apply symbol-append
+		(intersperse head (map expression-name tail)))
+	 (apply symbol-append (expression-name head) '/
+		(intersperse ': (map expression-name tail)))))
+    (_
+     (pass expression ->string string->symbol))))
+\end{Snippet}
+\begin{Snippet}
+(define original-name
+  (let ((number 0))
+    (lambda base
+      (match base
+	(()
+	 (set! number 0))
+	((base)
+	 (set! number (+ number 1))
+	 (string->symbol (string-append
+			  (->string (expression-name base))
+			  "/"
+			  (->string number))))))))
+\end{Snippet}
+\begin{Snippet}
+(define (passing-arguments arguments names final)
+  (assert (= (length arguments) (length names)))
+  (match arguments
+    (()
+     (assert (null? names))
+     final)
+    ((argument . next)
+     (let (((name . names) names))
+       (if (compound? argument)
+	   (passing-arguments next names
+			      (passing argument
+				       `(lambda (,name) ,final)))
+       ;else
+	   (passing-arguments next names final))))))
+\end{Snippet}
+\begin{Snippet}
+(define (passing expression continuation)
+  (match expression
+    (('quote _)
+     `(,continuation ,expression))
+\end{Snippet}
+\begin{Snippet}
+    (('if <condition> <then> <else>)
+     (let ((result (original-name <condition>)))
+       (passing <condition> `(lambda (,result)
+			       (if ,result
+				   ,(passing <then> continuation)
+				   ,(passing <else> continuation))))))
+\end{Snippet}
+\begin{Snippet}
+    (('lambda <args> <body>)
+     `(,continuation (lambda (,@<args> return)
+		       ,(passing <body> 'return))))
+\end{Snippet}
+\begin{Snippet}
+    ((function . arguments)
+     (let ((simple-arguments (map (lambda (argument)
+				    (if (compound? argument)
+					(original-name argument)
+					argument))
+				  arguments)))	   
+       (passing-arguments arguments simple-arguments
+			  `(,(passing-function function)
+			    ,@simple-arguments
+			    ,continuation))))
+\end{Snippet}
+\begin{Snippet}
+    (_
+     `(,continuation ,expression))))
+\end{Snippet}
+\begin{Snippet}
+(define (passing-program program)
+  (let (((('define names functions) ... expression) program))
+    `(,@(map (lambda (name function)
+	       (let ((('return pass-function) (passing function 'return)))
+		 `(define ,(passing-function name) ,pass-function)))
+	     names functions)
+      ,(passing expression 'exit))))
+\end{Snippet}
+\begin{Snippet}
+(define (pass= a b return)
+  (return (= a b)))
+\end{Snippet}
+\begin{Snippet}
+(define (pass- a b return)
+  (return (- a b)))
+\end{Snippet}
+\begin{Snippet}
+(define (pass* a b return)
+  (return (* a b)))
+\end{Snippet}
+\begin{Snippet}
+(e.g.
+ (begin
+   (original-name)
+   (passing-program '((define !
+			(lambda (n)
+			  (if (= n 0)
+			      1
+			      (* n (! (- n 1))))))
+		      (! 5))))
+ ===>
+\end{Snippet}
+\begin{Snippet}
+ ((define pass-!
+    (lambda (n return)
+      (pass= n
+	     0
+	     (lambda (n=0/1)
+	       (if n=0/1
+		   (return 1)
+		   (pass- n
+			  1
+			  (lambda (n-1/3)
+			    (pass-!
+			     n-1/3
+			     (lambda (!/n-1/2)
+			       (pass* n !/n-1/2 return))))))))))
+  (pass-! 5 exit)))
+\end{Snippet}
+\begin{Snippet}
+(define (passing-function-label name)
+  (let (((content) (symbol-match "^pass-(.+)$" name)))
+    (string->keyword content)))
+\end{Snippet}
+\begin{Snippet}
+(define (label . parts)
+  (string->keyword (apply string-append (map ->string parts))))
+\end{Snippet}
+\begin{Snippet}
+(define new-label
+  (let ((label-counter 0))
+    (lambda parts
+      (cond ((null? parts)
+	     (set! label-counter 0))
+	    (else
+	     (set! label-counter (+ label-counter 1))
+	     (apply label `(,@parts - ,label-counter)))))))
+\end{Snippet}
+\begin{Snippet}
+(define (maybe-register source)
+  (cond ((symbol? source)
+	 `(,source))
+	((pair? source)
+	 (first source))
+	(else
+	 '())))
+\end{Snippet}
+\begin{Snippet}
+(define (instruction-registers/read instruction)
+  (match instruction
+\end{Snippet}
+\begin{Snippet}
+    (([target] '<- source)
+     (union `(,target) (maybe-register source)))
+\end{Snippet}
+\begin{Snippet}
+    ((target '<- register/value/location)
+     (maybe-register register/value/location))
+\end{Snippet}
+\begin{Snippet}
+    ((target '<- left x right)
+     (union (maybe-register left) (maybe-register right)))
+\end{Snippet}
+\begin{Snippet}
+    ((target '<- operator operand)
+     (maybe-register operand))
+\end{Snippet}
+\begin{Snippet}
+    (('if left >?< right 'goto target)
+     (union (maybe-register left) (maybe-register right)
+	    (maybe-register target)))
+\end{Snippet}
+\begin{Snippet}
+    (('push register/value)
+     (maybe-register register/value))
+\end{Snippet}
+\begin{Snippet}
+    (('goto register/value)
+     (maybe-register register/value))
+\end{Snippet}
+\begin{Snippet}
+    (_
+     '())))
+\end{Snippet}
+\begin{Snippet}
+(define (instruction-registers/modified instruction)
+  (match instruction
+\end{Snippet}
+\begin{Snippet}
+    (('pop register)
+     `(,register))
+\end{Snippet}
+\begin{Snippet}
+    ((target '<- . _)
+     `(,target))
+\end{Snippet}
+\begin{Snippet}
+    (_
+     '())))
+\end{Snippet}
+\begin{Snippet}
+(define ((operation-from? actions) pass-@)
+  (any (lambda ((@ pass-?))
+	 (equal? pass-@ pass-?))
+       actions))
+\end{Snippet}
+\begin{Snippet}
+(define ((operator-from actions) pass-@)
+  (let (((@ pass-@) (find (lambda ((% pass-%))
+			    (equal? pass-@ pass-%))
+			  actions)))
+    @))
+\end{Snippet}
+\begin{Snippet}
+(define (defined-function? operator)
+  (symbol? operator))
+\end{Snippet}
+\begin{Snippet}
+(define sign (operator-from primitive-operators))
+\end{Snippet}
+\begin{Snippet}
+(define (used-registers machine-code)
+  (match machine-code
+\end{Snippet}
+\begin{Snippet}
+    (()
+     '())
+\end{Snippet}
+\begin{Snippet}
+    ((instruction . rest)
+     (let ((read-registers (instruction-registers/read instruction))
+	   (modified-registers (instruction-registers/modified instruction)))
+       (difference (union read-registers (used-registers rest))
+		   (difference modified-registers read-registers))))))
+\end{Snippet}
+\begin{Snippet}
+(define (passing-program->assembly program/CPS)
+  (let (((('define names passing-functions)
+	  ...
+	  expression) program/CPS))
+\end{Snippet}
+\begin{Snippet}
+    (define (argument-names function-name)
+      (any (lambda (name ('lambda (arguments ... return) . _))
+             (and (equal? name function-name)
+                  arguments))
+           names passing-functions))
+\end{Snippet}
+\begin{Snippet}
+    (define (assembly expression/cps registers)
+\end{Snippet}
+\begin{Snippet}
+      (match expression/cps
+	(('lambda args body)
+	 (let ((label (new-label 'lambda)))
+	   `((result <- ,label)
+	     ,label
+	     ,@(assembly body registers))))
+\end{Snippet}
+\begin{Snippet}
+        (('return value)
+         `((result <- ,value)
+           (goto return)))
+\end{Snippet}
+\begin{Snippet}
+	((pass<?> a b ('lambda (a<?>b) ('if a<?>b
+				       <then>
+				       <else>)))
+          (let ((else (new-label 'else))
+                (registers (union registers
+                                  (maybe-register a)
+                                  (maybe-register b))))
+            `((if ,a ,(inversion (sign pass<?>)) ,b goto ,else)
+	      ,@(assembly <then> registers)
+	      ,else
+	      ,@(assembly <else> registers))))
+\end{Snippet}
+\begin{Snippet}
+	((operator . operands)
+         (call operator operands registers))))
+\end{Snippet}
+\begin{Snippet}
+    (define (call operator operands registers)
+      (cond ((primitive-operation? operator)
+             (call-primitive operator operands registers))
+\end{Snippet}
+\begin{Snippet}
+            ((defined-function? operator)
+             (call-defined operator operands registers))
+\end{Snippet}
+\begin{Snippet}
+            #;((anonymous-function? operator)
+             (call-anonymous operator operands registers))))
+\end{Snippet}
+\begin{Snippet}
+    (define (call-primitive operator operands registers)
+      (let (((left right continuation) operands))
+        (match continuation
+\end{Snippet}
+\begin{Snippet}
+          (('lambda (result) body)
+           `((,result <- ,left ,(sign operator) ,right)
+             ,@(assembly body (union registers
+                                     (maybe-register left)
+                                     (maybe-register right)
+                                     `(,result)))))
+\end{Snippet}
+\begin{Snippet}
+          (_ ;; a ``return'' continuation
+           `((result <- ,left ,(sign operator) ,right)
+             (goto ,continuation))))))
+\end{Snippet}
+\begin{Snippet}
+    (define (call-defined function arguments registers)
+\end{Snippet}
+\begin{Snippet}
+      (define (save registers)
+        (map (lambda (register)
+               `(push ,register))
+             registers))
+\end{Snippet}
+\begin{Snippet}
+      (define (restore registers)
+        (map (lambda (register)
+               `(pop ,register))
+             (reverse registers)))
+\end{Snippet}
+\begin{Snippet}
+      (define (pass values function)
+        (let ((names (argument-names function)))
+          (map (lambda (name value)
+                 `(,name <- ,value))
+	       names values)))
+\end{Snippet}
+\begin{Snippet}
+      ;; body of `call-defined' begins here
+      (let (((arguments ... continuation) arguments)
+            (entry (passing-function-label function)))
+        (match continuation
+
+          (('lambda (result) body)
+           (let* ((proceed (new-label 'proceed))
+                  (sequel (assembly body registers))
+                  (registers (intersection registers
+                                  (used-registers sequel))))
+             `(,@(save registers)
+               ,@(pass arguments function)
+	       (push return)
+	       (return <- ,proceed)
+               (goto ,entry)
+               ,proceed
+	       (pop return)
+               ,@(restore registers)
+               ,@sequel)))
+
+          (_ ;; tail call optimization
+           `(,@(pass arguments function)
+	     (goto ,(passing-function-label function)))))))
+
+    `((return <- end:)
+      ,@(assembly expression '())
+      ,@(append-map (lambda (name ('lambda args body))
+		      `(,(passing-function-label name)
+			,@(assembly body '())))
+		    names passing-functions)
+      end:
+      (halt))))
+\end{Snippet}
+\begin{Snippet}
+(e.g.
+ (begin
+   (new-label)
+   (passing-program->assembly
+    '((define pass-!
+	(lambda (n return)
+	  (pass= n 0
+	    (lambda (n=0/1)
+	      (if n=0/1
+		  (return 1)
+	      ;else
+		  (pass- n 1
+		    (lambda (n-1/3)
+		      (pass-! n-1/3
+		        (lambda (!/n-1/2)
+			  (pass* n !/n-1/2
+			    return))))))))))
+      (pass-! 5 return))))
+\end{Snippet}
+\begin{Snippet}
+ ===> ((return <- end:)
+       (n <- 5)
+       (goto !:)
+     !:
+       (if n <> 0 goto else-1:)
+       (result <- 1)
+       (goto return)
+     else-1:
+       (n-1/3 <- n - 1)
+       (push n)
+       (n <- n-1/3)
+       (push return)
+       (return <- proceed-2:)
+       (goto !:)
+     proceed-2:
+       (pop return)
+       (pop n)
+       (result <- n * !/n-1/2)
+       (goto return)
+     end:
+       (halt)))
+\end{Snippet}
+\begin{Snippet}
+(define (compile scheme-program)
+  (assemble (passing-program->assembly
+	     (passing-program scheme-program))))
+\end{Snippet}

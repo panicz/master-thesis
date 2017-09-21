@@ -1,0 +1,47 @@
+\section*{Streszczenie}
+
+Celem niniejszej pracy jest wypracowanie technik pozwalających
+na efektywne wykonywanie programów napisanych w stylu funkcyjnym.
+Praca składa się z dwóch części. W pierwszej przedstawione są klasyczne
+techniki transformacji programów funkcyjnych do postaci imperatywnej
+oraz podstawowe metody dowodzenia twierdzeń o własnościach programów.
+W części drugiej proponowana jest metoda przekształcania pewnych klas
+programów operujących na listach w równoważne programy operujące na
+tablicach. Ponadto analizowane są warunki pozwalające na przekształcenie
+funkcyjnej implementacji algorytmu sortowania szybkiego do optymalnej
+postaci imperatywnej.
+
+Wszystkie programy źródłowe oraz transformacje wyrażone są przy pomocy
+czysto funkcyjnego podzbioru algorytmicznego języka Scheme, opisa\-nego
+w rozdziale 2. Docelowym modelem obliczeń jest wariant maszyny RAM, której
+model i zestaw instrukcji zostały dogłębnie opisane w rozdziale 3, wraz
+z implementacją, wykorzystującą imperatywne składniki języka Sche\-me.
+
+W rozdziale 4 zaprezentowane są klasyczne techniki
+przekształcania programów wyrażonych w omówionym podzbiorze języka
+Scheme w ciągi instrukcji dla maszyny RAM, w szczególności konwersja
+programów do postaci przekazującej kontynuacje (ang. \textit{Continuation-Passing
+  Style}) oraz optymalizacja rekurencji ogonowej (ang. \textit{Tail-Call
+  Optimization}).
+
+Rozdział 5 opisuje uproszczony wariant systemu Boyera-Moore'a wraz
+z pełną listą aksjomatów służących do dowodzenia twierdzeń o programach
+wyrażonych w zaprezentowanym podzbiorze języka Scheme. W przeciwieństwie
+jednak do oryginalnego systemu Boyera i Moore'a, wypracowany system nie
+jest w stanie samodzielnie dowodzić twierdzeń, i może jedynie służyć
+do sprawdzania poprawności dowodów wprowadzonych przez użytkownika.
+
+W rozdziale 6 wypracowana zostaje autorska metoda konwersji programów
+funkcyjnych do postaci otrzymujących i przekazujących tablice. Językiem
+źródłowym jest czysto funkcyjny podzbiór języka Scheme opisany w rozdziale
+2, zaś językiem docelowym -- pełny język Scheme zawierajacy składniki
+imperatywne. Wyprawcowana metoda konwersji ma jedynie szkicowy charakter
+i z pewnością wymaga dopracowania.
+
+Rozdział 7 podejmuje zagadnienie automatycznej konwersji funkcyjnego
+wariantu algorytmu sortowania szybkiego do postaci imperatywnej,
+jednak nie prezentuje działającego algorytmu konwersji.
+
+\section*{Słowa kluczowe}
+struktury danych, transformacje programów, kompilacja, dowodzenie twierdzeń,
+programowanie funkcyjne

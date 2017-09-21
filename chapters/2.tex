@@ -1,0 +1,1249 @@
+\chapter{The source language}
+
+\begin{chapquote}{Aristotle, \textit{On Interpretation}}
+  First we must define the terms ``noun'' and ``verb'', then
+  the terms ``denial'' and ``affirmation'', then ``proposition''
+  and ``sentence''.
+\end{chapquote}
+
+\section{Overview}
+
+In the previous chapter, we presented two variants of seemingly
+the same algorithm -- one written in the functional language Haskell,
+and the other presented in its classical imperative form.
+
+In this work, we are going to analyze the general conditions
+that need to be satisfied in order to be able to transform functional
+programs that operate on lists into equivalent imperative programs
+that operate on arrays, and search for the means that can be used
+in order to detect whether those conditions are actually satisfied.
+
+We shall begin with defining a programming language
+that will be used to express algorithms on data structures
+that are supposed to be optimized, and specifying a computational
+model that will be the target of our transformations.
+
+% Się zarysowuje plan pracy pomału.
+% Rozdział 1: wprowadzenie (i sformułowanie problemu)
+% Rozdział 2: organon
+% - język funkcyjny: podzbiór języka scheme bez call/cc i set!
+%   oraz z nieokreślonym porządkiem ewaluacji
+% - model ewaluacji: maszyna abstrakcyjna CK; prosty kompilator
+% - dowodzenie własności programów komputerowych (Boyer-Moore)
+% - wnioskowanie o złożoności funkcji oraz zużyciu zasobów
+% Rozdział 3: dowiedzenie pożądanych własności
+% Rozdział 4: benczmarki
+% Rozdział 5: podsumowanie i wnioski
+
+%% \section{A purely functional subset of Scheme}
+
+An ideal programming language for our purpose would possess the
+following traits: it would be simple to describe, simple to process
+and powerful enough to express any computable function.
+
+For those reasons, we decided to choose a purely functional subset
+of the Scheme programming language\cite{R5RS}, devoid of the \texttt{set!}
+instruction and the \texttt{call-with-current-continuation} control
+operator. Furthermore, although the specification of Scheme defines the strict
+(or applicative) order of evaluation, the programs presented in this
+work shall never rely on this. Lastly, as the point of this work
+is to describe techniques for optimizing programs that operate on lists,
+our subset of Scheme need not support vectors, in spite of their presence
+in the specification. Likewise, we shall ignore the support of character
+strings in the language, as well as its numerical tower (for our purpose,
+the support for integer numbers should be sufficient).
+
+There's plenty of excellent education resources available for the Scheme
+programming language \cite{SICP} \cite{HTDP} \cite{EOPL}
+\cite{FriedmanSpringer1993} \cite{FriedmanFelleisen1996} \cite{Dybvig2009}
+\cite{Sitaram2003} \cite{Godek2016}, so only a brief introduction to
+the language will be presented here.
+
+As Scheme is not only going to be the source language, but also -- occasionally
+-- the intermediate language for compilation, we are also going to describe
+some imperative features that are going to appear in the generated code.
+
+\section{Syntax}
+
+Syntactically, Scheme employs a fully parenthesized prefix notation
+built around the so called s-expressions that could be described
+with the following BNF-style grammar:
+\begin{Snippet}
+<s-expression> ::= <atom> | (<s-expression> . <s-expression>);
+
+<atom> ::= () | <symbol> | <number> | #true | #false;
+\end{Snippet}
+
+A \texttt{<number>} is a sequence of decimal digits. A \texttt{<symbol>}
+is a sequence of non-whitespace and non-parenthetic characters that
+does not begin with \texttt{\#} and cannot be interpreted as
+a \texttt{<number>}.
+
+The tokens are separated either by white spaces or by parentheses.
+
+In addition, the \textit{pair notation}, e.g. 
+\texttt{(a\,\,.\,\,(b\,\,.\,\,(c\,\,.\,\,d)))}
+is equivalent to \texttt{(a\,\,b\,\,c\,\,.\,\,d)}, and in particular
+\texttt{(a\,\,.\,\,(b\,\,.\,\,(c\,\,.\,\,())))} (the \textit{last tail} being an
+empty list) is equivalent to \texttt{(a\,\,\,b\,\,\,c)}.
+
+The expressions \texttt{(quote \textit{x})},
+\texttt{(quasiquote \textit{x})}, \texttt{(unquote \textit{x})}
+and \texttt{(unquote\--splicing \textit{x})} can be abbreviated
+as \texttt{'\textit{x}}, \texttt{`\textit{x}}, \texttt{,\textit{x}}
+and \texttt{,@\textit{x}}, respectively.
+
+The semicolon character (\texttt{;}) is used to mark comments that span to the
+end of line, or -- if the semicolon is directly preceded by the \texttt{\#}
+character -- until the end of the following s-expression.
+
+\section{Semantics}
+
+The value of a number is that number itself (thus we say that numbers
+are self-evaluating). The value of a symbol is the value that has been
+bound to that symbol. A symbol is said to be bound if either:
+\begin{itemize}
+\item it is predefined by the language,
+\item it has been defined using a \texttt{define} special form (or
+  its derivative) in the current lexical context,
+\item it appears in the argument list of a surrounding \texttt{lambda}
+  expression (or its derivative).
+\end{itemize}
+If a symbol is unbound, the meaning of a program is undefined.
+
+An s-expression of the form \texttt{(operator operands ...)}
+is called a \textit{combination}. A combination can either
+be a special form, or a function application.
+
+\subsection{Special forms}
+
+Special forms can either be primitive or derivative.
+
+\subsection{The primitive special forms}
+
+The subset of Scheme of our interest contains the following
+primitive special forms:
+\texttt{lambda}, \texttt{define}, \texttt{if} and \texttt{quote}.
+
+\subsubsection{The \texttt{lambda} form}
+
+The \texttt{lambda} form is used to create function, and consists
+of two parts: a \textit{list of arguments} and a \textit{body}.
+For example, a function of two arguments whose value
+is its first argument can be created in the following way:
+
+\begin{equation*}
+  \mathtt{(lambda}
+  \underbrace{\mathtt{(x\,\,y)}}_{arguments}
+  \underbrace{\mathtt{x}}_{body}
+  \mathtt{)}
+\end{equation*}
+
+Note that the symbols that appear in the argument list must be unique,
+i.e. it must not be the case that the same symbol appears on the list
+more than once. Also, the body must be a valid Scheme program.
+
+The list of arguments need not be proper. In such cases, the
+dotted tail argument represents a list of optional (variadic)
+arguments.
+
+Although the \texttt{lambda} form is sufficient to express
+any computation \cite{Harrison1997}, including operations
+on natural numbers as well as lists\cite{SICP}, Scheme provides
+some additional primitive forms for convenience.
+
+\subsubsection{The \texttt{define} form}
+
+The \texttt{define} form is used to extend the current lexical context
+with a new binding. It takes two operands:
+a symbol that shall be bound with a value (\textit{definiendum}),
+and an expression whose value shall be bound to the symbol
+(\textit{definiens}). For example, the definition
+
+\begin{equation*}
+  \mathtt{(define}
+  \underbrace{\mathtt{x}}_{definiendum}
+  \underbrace{\mathtt{5}}_{definiens}
+  \mathtt{)}
+\end{equation*}
+
+causes \texttt{x} to be bound to the value \texttt{5}.
+The \texttt{define} special form is the only primitive special form
+that is not considered an expression.
+
+Also, since -- unlike \texttt{lambda} -- the \texttt{define} form
+does not create a new scope, but rather extends the current one,
+it allows to define functions that are recursive.
+
+Although the basic form of \texttt{define} is \texttt{(define name value)},
+we are going to treat usages like \texttt{(define (f x) ...)} as short-hand
+for \texttt{(define f (lambda (x) ...))} and so on\footnote{In particular,
+  the \texttt{(define ((f x) y) ...)} can be treated as a short-hand for
+  \texttt{(define f (lambda (x) (lambda (y) ...)))}. This generalized
+  feature, called \textit{curried definitions}, is not provided by most
+  implementations of Scheme.}.
+
+\subsubsection{The \texttt{if} form}
+
+The \texttt{if} expressions take the form
+\begin{Snippet}
+  (if <condition> <consequent> <alternative>)
+\end{Snippet}
+If the \texttt{<condition>} evaluates to \texttt{\#false},
+then the value of the whole expression is value of
+\texttt{<alternative>}; otherwise, it is the value of
+\texttt{<consequent>} (therefore, every value other than
+\texttt{\#false} is considered to be true in the context
+of an \texttt{if} expression. Such values will be referred
+to as \textit{truth-ish} throughout this text).
+
+\subsubsection{The \texttt{quote} form}
+
+The \texttt{quote} form is used to input literal data.
+For example, the value of the expression \texttt{(quote x)}
+is the symbol \texttt{x}. The \texttt{quote} operator is
+redundant for self-evaluating expressions (e.g. numbers),
+so there is no practical difference between expressions
+\texttt{(quote 1)} and \texttt{1}.
+
+The operator is not idempotent, though: the value of
+the expression \texttt{(quote\,\,(quote\,\,1))} is a list
+of two elements, whose first element is the symbol
+\texttt{quote}, and whose second element is
+the number \texttt{1}.
+
+As it was noted in the section describing the syntax,
+the expression \texttt{(quote\,\,x)} can be abbreviated
+as \texttt{'x}, so -- consequently -- the expression
+\texttt{(quote\,\,(quote\,\,1))} can equivalently be written
+as \texttt{'\phantom{}'1}, and also \texttt{'(quote\,\,1)}
+and \texttt{(quote\,\,'1)}.
+
+\subsubsection{The \texttt{begin} and \texttt{set!} forms}
+
+Although the source programs that we are going to write
+are purely applicative, the resulting program will occasionally
+contain some procedural constructs. The \texttt{begin} form
+is used for sequencing operations. Its value is the value of
+the last expression in that form (in particular, \texttt{(begin x)}
+and \texttt{x} are equivalent).
+
+The \texttt{set!}\,\,form is used for performing assignment.
+For example, the value of the expression\footnote{
+  It may be questionable whether that program can actually
+  be called an expression, as it introduces a definition
+  into its current scope. The snippet presents a very
+  bad style of programming, but it also presents the meaning
+  of the special forms discussed in this section.
+}
+
+\begin{Snippet}
+  (begin
+    (define x 5)
+    (set! x (+ x 1))
+    (* x x))
+\end{Snippet}
+
+is the number 36. There is no need to use \texttt{begin} in
+the body of the \texttt{lambda} form: \texttt{(lambda args (begin actions ...))}
+and \texttt{(lambda args actions ...)} are equivalent. Most typically,
+the \texttt{begin} form is used in one or both branches of the \texttt{if}
+form.
+
+\subsubsection{The derivative forms}
+
+Scheme offers a mechanism that allows to define
+derivative special forms, often refereed to as syntax extensions
+or macros. It also predefines a set of helpful derivative
+special forms: \texttt{let}, \texttt{let*}, \texttt{and},
+\texttt{or}, \texttt{cond} and \texttt{quasiquote}.
+
+\subsubsection{The \texttt{let} form}
+
+The \texttt{let} form is used to create local bindings,
+and is defined so that
+\begin{Snippet}
+(let ((<variable1> <value1>)
+      (<variable2> <value2>)
+      ...)
+  body)
+\end{Snippet}
+expands to
+\begin{Snippet}
+((lambda (<variable1> <variable2> ...) body) <value1> <value2> ...)
+\end{Snippet}
+
+\subsubsection{The \texttt{let*} form}
+
+In the case of the \texttt{let} form, the bindings of variables
+to all values occur simultaneously, so for example in the expression
+\begin{Snippet}
+1 (let ((x 2)
+2       (y (+ x 1)))
+3   (+ x y))
+\end{Snippet}
+the symbol \texttt{x} in the line \texttt{2} does not refer to the value
+from the binding in the line \texttt{1}, but to the value from the outer
+scope of the expression. This behavior is often undesired in practice.
+
+For that reason, Scheme provides a sequential variant of \texttt{let}
+called \texttt{let*}, which is defined so that
+\begin{Snippet}
+(let* ((<variable1> <value1>)
+       (<variable2> <value2>)
+       ...)
+  <body>)
+\end{Snippet}
+expands to
+\begin{Snippet}
+(let ((<variable1> <value1>))
+  (let* ((<variable2> <value2>)
+         ...)
+    <body>))
+\end{Snippet}
+
+\subsubsection{The \texttt{and} form}
+
+The \texttt{and} form expresses logical conjunction that uses
+short-circuited evaluation \cite{McCarthy1960} \cite{Sebesta2008},
+defined so that
+\begin{Snippet}
+(and <condition1> <condition2> ...)
+\end{Snippet}
+expands to
+\begin{Snippet}
+(if <condition1>
+    (and <condition2> ...)
+    #false)
+\end{Snippet}
+and
+\begin{Snippet}
+(and <final-condition>)
+\end{Snippet}
+expands to
+\begin{Snippet}
+<final-condition>
+\end{Snippet}
+thereby causing the \texttt{and} clause to expand either to \texttt{\#false}
+or to the value of its \texttt{<final-condition>}.
+
+\subsubsection{The \texttt{or} form}
+
+Like the \texttt{and} form, the \texttt{or} special form performs
+evaluation in a short-circuited manner, and is also defined to evaluate
+to the value of its succeeding clause. This last requirement causes
+a slight complication under the strict model of evaluation, as it
+requires to capture the value of expression in order to make sure that it
+is evaluated only once:
+
+\begin{Snippet}
+(or <condition1> <condition2> ...)
+\end{Snippet}
+
+expands to 
+
+\begin{Snippet}
+(let ((##result <condition1>))
+  (if ##result ##result (or <condition2> ...)))
+\end{Snippet}
+
+where \texttt{\#\#result} is a unique identifier that does not appear
+anywhere in the rest of the code. As in the case of \texttt{and},
+the expression \texttt{(or <final-condition>)} simply expands to
+\texttt{<final-condition>}.
+
+\subsubsection{The \texttt{cond} form}
+
+The \texttt{cond} form is used to avoid nested \texttt{if}s\footnote{Actually,
+  the \texttt{cond} form present in the Scheme language is a bit more complex
+  than presented here.}.
+The expression
+\begin{Snippet}
+(cond (<condition1>
+       <value1>)
+      (<condition2>
+       <value2>)
+       ...)
+\end{Snippet}
+gets expanded to
+\begin{Snippet}
+(if <condition1>
+    <value1>
+    (cond (<condition2>
+           <value2>)
+          ...))
+\end{Snippet}
+
+\subsubsection{The \texttt{when} and \texttt{unless} forms}
+
+In the generated imperative code, we may sometimes want to use
+the forms \texttt{when} and \texttt{unless}. The former is
+defined so that
+\begin{Snippet}
+  (when condition actions ...)
+\end{Snippet}
+expands to
+\begin{Snippet}
+  (if condition (begin actions ...))
+\end{Snippet}
+and the latter -- so that
+\begin{Snippet}
+  (unless condition actions ...)
+\end{Snippet}
+expands to
+\begin{Snippet}
+  (if (not condition) (begin actions ...))
+\end{Snippet}
+
+\subsubsection{The \texttt{quasiquote} form}
+
+The \texttt{quasiquote} form (in conjunction with two helper keywords,
+namely -- \texttt{unquote} and \texttt{unquote-splicing}) is used
+for creating data conveniently. The convenience stems from the fact,
+that the syntaxes \texttt{(quasiquote x)}, \texttt{(unquote x)} and
+\texttt{(unquote-splicing x)} can be abbreviated as \texttt{`x},
+\texttt{,x} and \texttt{,@x}, respectively. This allows to create
+data that contains some variable elements in it, for example the
+value of the expression
+\begin{Snippet}
+(let ((x 3)
+      (y '(5 6 7)))
+  `(1 2 ,x 4 ,@y 8))
+\end{Snippet}
+is the list \texttt{(1 2 3 4 5 6 7 8)}.
+
+\subsubsection{Non-standard derivative forms}
+
+\subsubsection{Receiving multiple values}
+
+Scheme allows functions to return more than one value using the
+\texttt{values} form. For example, the form \texttt{(values 1 2 3)}
+returns three values: \texttt{1}, \texttt{2} and \texttt{3}.
+
+Normally (e.g. in the context of a function call) only the first
+value is taken into account, and the remaining ones are ignored.
+Scheme provides a special form \texttt{call-with-values},
+which allows to capture the remaining return values. For example,
+\texttt{(call-with-values (lambda () (values 1 2 3)) list)} passes
+the values \texttt{1}, \texttt{2} and \texttt{3} as subsequent argument
+to the \texttt{list} function (effectively creating the list \texttt{(1 2 3)}).
+
+We are going to assume here, that the \texttt{let*} form can be abused
+to receive multiple values\cite{SRFI-71}, so that, for example
+
+\begin{Snippet}
+(let* ((a b c (values 1 2 3)))
+  (list a b c))
+\end{Snippet}
+
+is equivalent to
+
+\begin{Snippet}
+(call-with-values
+  (lambda () (values 1 2 3))
+  (lambda (a b c) (list a b c)))
+\end{Snippet}
+
+Note that the multiple return value feature will never be used
+in this work when Scheme is to be treated as the subject language
+(i.e. as data to be processed by compilers, interpreters, theorem
+provers and other transformers).
+
+\subsubsection{The \texttt{is} form}
+
+We shall also be using a non-standard extension to the Scheme language,
+proposed by the author of this work in \cite{SRFI-156}. In short,
+it introduces the \texttt{is} special form, such that
+
+\begin{Snippet}
+  (is a related-to? b)
+\end{Snippet}
+
+expands to
+
+\begin{Snippet}
+  (related-to? a b)
+\end{Snippet}
+
+In addition, it treats the \texttt{\_} (underscore) symbol in the argument
+position specially. For example,
+
+\begin{Snippet}
+  (is _ related-to? x)
+\end{Snippet}
+
+expands to
+
+\begin{Snippet}
+  (lambda (_) (related-to? _ x))
+\end{Snippet}
+
+\subsection{Function applications}
+
+If a combination is not a special form, it is treated as a function
+application. A function that is applied to can either be a primitive
+function, or a function created with a \texttt{lambda} form.
+
+\subsubsection{Functions created with a \texttt{lambda} form}
+
+As noted before, the \texttt{lambda} form contains a list of arguments
+and a nested Scheme expression, referred to as the body of the
+\texttt{lambda} form.
+
+The value of the application of a function created by a \texttt{lambda}
+form is simply the value obtained by evaluating its body in the lexical
+scope extended with bindings of its arguments to the values of the
+operands of the combination.
+
+For example, the value of the expression
+\begin{Snippet}
+((lambda (x y) x) 5 10)
+\end{Snippet}
+is the value of the expression \texttt{x} in the environment where
+the symbol \texttt{x} is bound to \texttt{5} and the symbol \texttt{y}
+is bound to \texttt{10}.
+
+\subsection{A note on lexical scoping}
+
+Scheme is said to be a \emph{lexically scoped} language, as opposed
+to \emph{dynamically scoped}. \emph{Lexical scope} means
+that a symbol which occurs free in the body of a \texttt{lambda}
+expression (i.e. it does not appear on the argument list of the
+\texttt{lambda} expression) refers to the meaning from the context
+of the definition of that \texttt{lambda} expression, rather than
+the context of its usage (as it is the case for dynamic scope).
+
+For example, if we
+\begin{Snippet}
+(define square (lambda (x) (* x x)))
+\end{Snippet}
+it is apparent that the symbol \texttt{*} occurs free in the
+definiens. It is typically bound to a procedure that multiplies
+its arguments (see \emph{Primitive functions} section below).
+
+The question is, what would be the value of the expression
+\begin{Snippet}
+(let ((* +))
+  (square 5))
+\end{Snippet}
+
+where the symbol \texttt{+} is bound to a procedure that adds
+its arguments.
+
+In a dynamically scoped language, the value of that expression
+is \texttt{10}, whereas in a lexically scoped language it is \texttt{25}.
+
+\subsection{A note on recursive definitions}
+
+Note that there is a significant difference between the bindings created
+using the \texttt{define} form and the ones obtained introduced by
+\texttt{let} or \texttt{lambda}. In particular, \texttt{lambda} creates
+a new scope, whereas \texttt{define} introduces new bindings to the
+current scope.
+
+This difference becomes particularly significant if one attempts
+to define a recursive function. Because of that, the following
+expression of the \textit{factorial} won't work as one could hope:
+
+\begin{Snippet}
+(let ((! (lambda (n)
+           (if (= n 0)
+             1
+             (* n (! (- n 1)))))))
+  (! 5))
+\end{Snippet}
+
+The \texttt{!} symbol in the body of the \texttt{lambda} expression
+refers to the binding in the environment in which the \texttt{lambda}
+expression is evaluated (the so-called \emph{top-level} environment),
+and not the environment introduced by the \texttt{let} form (in which
+the \texttt{!} symbol gets bound to the value of the \texttt{lambda}
+expression).
+
+This is not the case with the \texttt{define} forms. The \texttt{define}
+form introduces a new binding to the current environment, so the
+definition
+
+\begin{Snippet}
+(define ! (lambda (n)
+            (if (= n 0)
+              1
+              (* n (! (- n 1))))))
+\end{Snippet}
+
+actually allows to compute a factorial. It can be noted
+however\cite{Harrison1997}, that the \texttt{lambda} form is sufficient
+not only for naming intermediate values of computation, but also for
+expressing recursive functions, through the application of the so-called
+\textit{fixed-point combinators}, i.e. a family of operators $\nabla$, such
+that for any $y$, $\nabla\,y\,=\,y\,\nabla\,y$.
+
+An example of a fixed-point combinator is called \texttt{Y}-combinator, and is
+defined as
+\begin{Snippet}
+(define Y (lambda (f)
+            (let ((R (lambda (x) (f (x x)))))
+              (R R))))
+\end{Snippet}
+
+Using this combinator, we can express the recursive factorial function
+without the use of the \texttt{define} form (i.e. using only derivatives
+of the \texttt{lambda} form) in the following way:
+
+\begin{Snippet}
+(let* ((F (lambda (f)
+            (lambda (n)
+              (if (= n 0)
+                1
+                (* n (f (- n 1)))))))
+       (! (Y F)))
+  (! 5))
+\end{Snippet}
+
+Such interpretation should work fine in lazy or call-by-name languages
+(such as Haskell or Lazy Racket), but will fail in languages with strict
+semantics (such as Scheme or Python or JavaScript or Java), that evaluate
+their arguments prior to function application, because the \texttt{Y}
+combinator would expand \textit{ad infinitum}\footnote{
+  Note that it is typical for strict languages to support assignment,
+  which allows to express recursion rather easily, e.g.: \\
+  \texttt{
+    (let ((!\,\,\#false))\\*
+    \-\ \ (set!\,\,!\,\,(lambda (n)\\*
+    \-\ \ \ \ \ \ \ \ \ \ \ \ (if (= n 0)\\*
+    \-\ \ \ \ \ \ \ \ \ \ \ \ \ \ 1\\*
+    \-\ \ \ \ \ \ \ \ \ \ \ \ \ \ (* n (!\,\,(- n 1))))))\\*
+    \-\ \ (!\,\,5)) \\*
+  }
+  Since the \texttt{lambda} expression is created in the context
+  where the variable \texttt{!} is already defined (as the value
+  \texttt{\#false}), there is no problem with it referring to itself.
+}.
+
+Therefore we need a fixed point combinator that yields a \textit{thunk}
+(i.e. a function of no arguments), and that this thunk is evaluated
+before the recursive call, so that the expanded version of our factorial
+would look like this (note the additional pair of parentheses around
+the nested \texttt{f} and generating \texttt{(Z F)}):
+
+\begin{Snippet}
+(let* ((F (lambda (f)
+            (lambda (n)
+              (if (= n 0)
+                1
+                (* n ((f) (- n 1)))))))
+       (! ((Z F))))
+  (! 5))
+\end{Snippet}
+
+where the fixed point combinator \texttt{Z} is defined (non-recursively) as
+
+\begin{Snippet}
+(define Z (lambda (f)
+            (let ((R (lambda (x)
+                       (lambda () (f (x x))))))
+              (R R))))
+\end{Snippet}
+
+While this construction's purpose is to implement recursion in strict
+languages, it should work in lazy languages as well.
+
+\subsection{Primitive functions}
+
+The considered subset of the Scheme programming language also
+contains a handful of primitive functions that operate on the
+primitive data types, i.e. numbers, lists and symbols.
+
+\subsubsection{Primitive functions that operate on numbers}
+
+The set of primitive functions that operate on numbers shouldn't
+be surprising: it consists of functions such as addition (\texttt{+}),
+multiplication (\texttt{*}), division (\texttt{/}) and subtraction
+(\texttt{-}). The functions \texttt{*} and \texttt{+} accept
+arbitrary number or arguments (for zero arguments, they evaluate
+to the neutral element of multiplication and addition, respectively).
+
+The functions \texttt{/} and \texttt{-} can take one or more arguments.
+The combinations \texttt{(/ x)} and \texttt{(- x)} are equivalent to
+\texttt{(/ 1 x)} and \texttt{(- 0 x)}, which evaluate to the inverted
+and negated value of \texttt{x}, respectively.
+
+The values of the expressions \texttt{(-\,\,a$_1$\,\,a$_2$\,\,...\,\,a$_n$)}
+and \texttt{(/\,\,b$_1$\,\,b$_2$\,\,...\,\,b$_k$)} (where $\mathtt{b}_i \ne 0$
+for $1 < i \le k$) are the numbers
+$((... (\mathtt{a}_1 - \mathtt{a}_2) - ...) - \mathtt{a}_n)$
+and $((... (\mathtt{b}_1 / \mathtt{b}_2) / ...) / \mathtt{b}_k)$.
+
+In addition, there are binary functions \texttt{quotient} and
+\texttt{remainder} whose names are rather self-explanatory.
+
+The unary predicate \texttt{number?} can be used to check whether
+a given object is a number.
+
+There is also the \texttt{random} function that takes an integer
+\texttt{n} and evaluates to a random integer between \texttt{0}
+and \texttt{n-1}. Note that although programs that contain
+a call to the \texttt{random} function are no longer referentially
+transparent, they can still be analyzed in terms of the substitution
+model of computation.
+
+\subsubsection{Primitive functions that operate on lists}
+
+The basic function for constructing lists is called \texttt{cons}.
+It takes two arguments. The value of the expression
+\texttt{(cons \emph{a} \emph{b})} is a (typically) newly allocated
+pair \texttt{(\emph{a}\,\,.\,\,\emph{b})} (also called a
+\textit{cons cell}) from the garbage-collected heap.
+
+In order to retrieve the values from a cons cell, one can
+use the accessor functions \texttt{car} and \texttt{cdr}.
+In particular, for any values \texttt{\textit{a}} and
+\texttt{\textit{b}}, the expression \texttt{(car (cons \textit{a} \textit{b}))}
+evaluates to \texttt{\textit{a}} and the expression
+\texttt{(cdr (cons \textit{a} \textit{b}))} evaluates
+to \texttt{\textit{b}}.
+
+The predicate \texttt{pair?} can be used to check whether a given
+object is a cons cell, so for any values \texttt{\textit{a}}
+and \texttt{\textit{b}}, the expression
+\texttt{(pair?\,\,(cons\,\,\textit{a}\,\,\textit{b}))}
+evaluates to truth-ish value. On the other hand,
+for any value \texttt{\textit{x}}, if \texttt{\textit{x}} is an
+atom, then \texttt{(pair?\,\,\textit{x})} evaluates
+to \texttt{\#false}.
+
+The \texttt{apply} function can be used to apply a function
+to a list of arguments. In particular, if \texttt{l} is a list
+\texttt{(a$_1$\,\,a$_2$\,\,...\,\,a$_n$)}, then \texttt{(apply\,\,f\,\,l)}
+is equivalent to \texttt{(f\,\,a$_1$\,\,a$_2$\,\,...\,\,a$_n$)}.
+
+\subsubsection{Primitive comparison predicates}
+
+The notion of identity in Scheme may seem a bit complex at first.
+The primitive predicate \texttt{eq?} can be used to check whether
+two expressions evaluate to the same object, that is, an object
+that occupies the same space in the computer memory.
+
+In particular, it need not be the case that
+\texttt{(eq?\,\,(cons\,\,1\,\,2)\,\,(cons\,\,1\,\,2))}, because
+the evaluation of each expression \texttt{(cons\,\,1\,\,2)} may allocate
+new memory, instead of re-using the already allocated.
+
+On the other hand, it is guaranteed that two instances of
+a symbol with the same shape are \texttt{eq?}, for example
+\texttt{(eq?\,\,'abc\,\,'abc)} evaluates to a truth-ish value,
+and that two symbols with different shapes are not \texttt{eq?},
+so for example \texttt{(eq?\,\,'abc\,\,'def)} evaluates to
+\texttt{\#false}. Also, it is guaranteed that the empty list,
+i.e. \texttt{'()}, is always \texttt{eq?} to itself.
+
+Situation gets more complicated in the case of numbers.
+Typically, two instances of the same number can be \texttt{eq?}
+if the numbers are small enough to fit into machine word.
+However, since Scheme supports arbitrary precision arithmetic,
+additional storage may be allocated on the heap to store
+results of arithmetic operations. In such cases, two instances
+of the same number may not be \texttt{eq?}.
+
+This is why Scheme provides a separate predicate, \texttt{=},
+that is used for checking numerical equality. In addition, it
+provides predicates \texttt{<}, \texttt{<=}, \texttt{>} and
+\texttt{>=} to check whether their arguments form ascending,
+non-descending, descending and non-ascending sequences, respectively.
+
+\subsection{Non-primitive functions defined in the language}
+
+In addition to the primitive functions, Scheme comes with a set
+of functions that are predefined, although they can be easily
+defined in terms of the primitives.
+
+\subsubsection{The notion of identity}
+
+The notion of identity based on memory address is very difficult
+to reason about, and its applicability is very limited. There
+is a much more natural and deterministic notion of identity that
+can be defined in terms of the presented primitive functions:
+
+\begin{Snippet}
+(define (equal? a b)
+  (or (eq? a b)
+      (and (pair? a)
+           (pair? b)
+           (equal? (car a) (car b))
+           (equal? (cdr a) (cdr b)))
+      (and (number? a)
+           (number? b)
+           (= a b))))
+\end{Snippet}
+
+The above definition reads as follows. Two objects are \texttt{equal?}
+either if they are \texttt{eq?}, or if they are both \texttt{pair?},
+their \texttt{car}s are \texttt{equal?} and \texttt{cdr}s are \texttt{equal?},
+or they are both \texttt{number?} and they are \texttt{=}
+(numerically equal).
+
+The actual \texttt{equal?} function available in Scheme is a bit more
+powerful, as it can take arbitrarily many arguments, and evaluates to
+\texttt{\#false} if any two differ (in the sense implied by the above
+definition) from each other.
+
+%% \subsubsection{Nonprintable symbols}
+
+%% It is sometimes desirable to be able to generate unique symbols that
+%% are distinct from every other object, and in particular -- distinct
+%% from every object that can be represented in the source code (they
+%% can be useful, for instance, as the value of the \texttt{\#\#result}
+%% in the expansion of the \texttt{or} special form presented earlier).
+
+%% We could therefore assume that there is a procedure \texttt{unique}
+%% available, whose each invocation returns a new symbol that is not
+%% representable in the Scheme source code.
+
+%% Note that the presence of a ``function'' whose value varies with
+%% each invocation is a departure from the idea of purely functional
+%% programming, although our programs can still be analyzed in terms
+%% of the substitution model of computation.
+
+\subsubsection{List processing}
+
+The \texttt{list} function evaluates to a list of its (evaluated) arguments,
+for example \texttt{(list\,\,1\,\,(*\,\,1\,\,2)\,(+\,\,1\,\,(*\,\,1\,\,2)))}
+evaluates to the list \texttt{(1\,\,2\,\,3)}. The \texttt{list} function
+could be defined simply as \texttt{(lambda x x)}, because if the list
+of arguments of a \texttt{lambda} expression is improper, then they
+are captured in a list and bound with the dotted tail of the argument list.
+
+The \texttt{map} function takes a $n$-ary function \texttt{f} (for $n \ge 1$)
+and $n$ lists of length $k$ and returns a new list of length $k$
+such that its elements are obtained from application of \texttt{f}
+to the subsequent $n$-tuples from the list. In other words, given lists
+$L^{(1)}, L^{(2)}, ..., L^{(n)}$, where
+$L^{(i)}=(a_1^{(i)}\,a_2^{(i)}\,...\,\,a_k^{(i)})$,
+\texttt{(map f $L^{(1)}\,L^{(2)}\,...\,\,L^{(n)}$)} produces a list
+\texttt{
+  ((f\,$a_1^{(1)} a_1^{(2)} ...\,\,a_1^{(n)}$)
+  (f\,$a_2^{(1)} a_2^{(2)} ...\,\,a_2^{(n)}$)\,...
+  (f\,$a_k^{(1)} a_k^{(2)}\,...\,\,a_k^{(n)}$))}.
+
+Of course, in the simplest (and most frequently used) case, i.e. when ${n=1}$
+and $L = (a_1\,a_2\,...\,\,a_k)$, the expression \texttt{(map f $L$)}
+evaluates to a list \texttt{((f\,$a_1$)\,(f\,$a_2$)\,...\,(f\,$a_k$))}.
+
+Another frequently used function is called \texttt{filter}. It takes
+a predicate \texttt{p?} and a list \texttt{L}, and returns a new list
+that contains only those elements from \texttt{L} that satisfy the
+predicate \texttt{p?}. The original order of elements is preserved.
+The expression \texttt{(filter\,\,p?\,\,L)} can therefore be read
+as ``such elements of \texttt{L} that \texttt{p?}'', for example,
+the expression \texttt{(filter (is \_ > 5) L)} can be read
+as ``such elements of \texttt{L} that are greater than \texttt{5}''.
+
+\subsubsection{Non-standard functions}
+
+There are a few functions that are going to be used in this work
+that are not a part of the standard Scheme. They are explained
+here briefly, and their definitions are given in the appendix \ref{non-standard-functions}.
+
+\subsubsection{Quantifiers}
+
+It is common in logic and mathematics to express statements using
+the quantifiers \textit{for all} ($\forall$) and \textit{exists} ($\exists$).
+For example, the sentence ``All men are mortal'' could be translated
+to predicate calculus as $\forall_x[man(x) => mortal(x)]$. We usually
+assume that there is a domain (universe) of all objects that we can talk
+about.
+
+In Scheme, we usually have to be a bit more specific. It is customary
+to define two functions, usually called \texttt{every} and \texttt{any},
+that take a predicate and a list of objects from the domain, and evaluate
+to \texttt{\#false} if every object from the list satisfies the
+predicate (in case of \texttt{every}) or there is no object in the list
+that satisfies the predicate (in case of \texttt{and}), and otherwise
+evaluate to some truth-ish value.
+
+So while the most faithful translation of the above example to Scheme
+would have the form
+\begin{Snippet}
+  (every (lambda (x)
+           (if (man? x)
+             (mortal? x)
+           ;else
+             #true))
+    THE-UNIVERSE)
+\end{Snippet}
+
+it is much more customary to assume that we have a list of all men,
+and check whether each element of that list satisfies the predicate
+\texttt{mortal?}, i.e. \texttt{(every\,\,mortal?\,\,men)}.
+
+\subsubsection{Set operators}
+
+Lists can interpreted not only as sequences, but also as sets.
+On such occasions, the order of elements on the list becomes
+immaterial. An \texttt{element} is thought of as being a member of
+a set represented by a list if it is a \texttt{member} of that list,
+which is denoted as \texttt{(member element list)}
+or \texttt{(is element member list)}.
+
+One can easily define the usual set operators such as \texttt{union},
+\texttt{intersection} and \texttt{difference}. However, the order
+of elements contained in the result of these operations is undefined
+and should not be relied on (in particular, it might be the case
+that any of these functions called with the same arguments return
+the result in a different order upon each invocation).
+
+\subsubsection{Folding}
+
+Suppose that we are given a list, for example $[a_1,a_2,a_3,...]$,
+and a binary operator $\circ$. The simplest variant of the $fold$
+operation computes the value of the expression
+$(a_1 \circ a_2 \circ a_3 \circ ...)$.
+
+Note that the above formulation is ambiguous. For example,
+\begin{equation*}
+  fold(\circ, [a_1,a_2,a_3,a_4])
+\end{equation*}
+i.e.
+\begin{equation*}
+  (a_1 \circ a_2 \circ a_3 \circ a_4)
+\end{equation*}
+can be interpreted as either
+\begin{equation} \label{fold-left}
+  (((a_1 \circ a_2) \circ a_3) \circ a_4)
+\end{equation}
+or
+\begin{equation} \label{fold-right}
+  (a_1 \circ (a_2 \circ (a_3 \circ a_4)))
+\end{equation}
+or
+\begin{equation} \label{fold-tree}
+  ((a_1 \circ a_2)\circ(a_3 \circ a_4)).
+\end{equation}
+
+The interpretation (\ref{fold-left}) is called \emph{left fold}
+and the interpretation (\ref{fold-right}) is called \emph{right fold}.
+
+Of course, if the operator $\circ$ is associative, the interpretation
+is (by definition) insignificant from the denotational point of
+view (although the amount of resources used by those interpretations
+might differ under various circumstances).
+
+Also, it is easy to see that, for the above $fold$ operation
+to make sense, it must be the case that $\circ : A \times A \mapsto A$.
+
+This requirement can be loosened a bit, though. By introducing
+additional argument $e$, we allow the operator to have a type
+$B \times A \mapsto B$ in the case of the left fold, or
+$A \times B \mapsto B$ in the case of the right fold: then,
+\emph{fold-left}$(\circ, e, [a_1, a_2, ..., a_n])$ is interpreted
+as $((...((e \circ a_1) \circ a_2)\circ ...)\circ a_n)$,
+and \emph{fold-right}$(\circ, e, [a_1, a_2, ..., a_n])$
+is interpreted as $(a_1 \circ (a_2 \circ (... \circ (a_n \circ e) ...)))$.
+
+The purpose for the presence the additional argument $e$ can be explained
+as follows. Imagine that you have a state of the world, $S$, and a
+list $L$ (possibly infinite) of actions that occur in the order as they
+appear on the list. There's an update function called $\lhd$ that takes
+a state and an action and returns an updated state. Under such circumstances,
+the evolution of the world can be modeled as \emph{fold-left}$(\lhd, S, L)$.
+
+If the operation $\circ$ has a neutral element (i.e. an element
+$\mathbbm{1}$ such that, for any valid $x$, $\mathbbm{1} \circ x = x$ in the
+case of left fold, or $x \circ \mathbbm{1} = x$ in the case of right
+fold), it is often convenient to choose it as the argument $e$.
+
+\subsubsection{Pattern matching}
+
+We can write programs that operate on s-expressions using the
+primitive functions \texttt{pair?}, \texttt{car}, \texttt{cdr}
+and \texttt{eq?}. For example, if we want to know whether a given
+s-expression \texttt{exp} represents a sum of exactly two elements,
+say, \texttt{(+~a~b)} (for some \texttt{a} and \texttt{b}),
+we can write a compound condition
+
+\begin{Snippet}
+(and (pair? exp)
+     (eq? (car exp) '+)
+     (pair? (cdr exp))
+     (pair? (cdr (cdr exp)))
+     (eq? (cdr (cdr (cdr exp))) '()))
+\end{Snippet}
+
+If we would like to capture the first and second operand to plus,
+using, say, the \texttt{let} from, we would obtain:
+
+\begin{Snippet}
+(if (and (pair? exp)
+         (eq? (car exp) '+)
+         (pair? (cdr exp))
+         (pair? (cdr (cdr exp)))
+         (eq? (cdr (cdr (cdr exp))) '()))
+    (let ((a (car (cdr exp)))
+          (b (car (cdr (cdr exp)))))
+       ;; here a and b are bound to the first
+       ;; and the second operand of +
+       ...)
+    ;;else
+    ...)
+\end{Snippet}
+
+However, it is very difficult to analyze this sort of code
+(whose task is rather simple). It is therefore convenient to
+extend the syntax of Scheme with the \texttt{match} macro\footnote{
+  This document uses a subset of the syntax proposed in
+  \cite{WrightCartwright1997}. A portable implementation
+  of this pattern language can be obtained from
+  \url{http://synthcode.com/scheme/match.scm}.
+}, so that the expression
+\begin{Snippet}
+(match exp
+  (('+ a b)
+   ;; here a and b are bound to the first
+   ;; and the second operand of +
+    ...)
+  ;; possibly other matches go next
+  ...)
+\end{Snippet}
+
+expands to the above condition and binding list. Furthermore,
+we can establish a convention, that whenever a compound expression
+appears in the place of an argument in the \texttt{lambda}
+form (or any derivative form, such as \texttt{let} or \texttt{let*}),
+it gets pattern-matched, so for instance
+\texttt{(lambda\,\,((a\,\,.\,\,b))\,\,body)}
+would be interpreted as
+\texttt{(lambda\,\,(x)\,\,(match\,\,x\,\,((a\,\,.\,\,b) body)))}
+(where the variable \texttt{x} does not occur free in the \texttt{body}
+form). The \texttt{\_} (underscore) symbol has a special meaning:
+it matches anything, but does not get bound to any value.
+
+We will sometimes be making use of a bit more exotic (and less obvious)
+feature of the pattern matcher, namely -- the \texttt{...} (ellipsis)
+operator. It behaves similarly to the \texttt{,@} (\texttt{unquote-splicing})
+operator in that it ``unsplices'' a list:
+
+\begin{Snippet}
+  (match '(1 2 3 4 5)
+    ((x y ... z)
+     ;; x is bound to 1,
+     ;; y -- to the list (2 3 4),
+     ;; and z -- to 5
+    ...))
+\end{Snippet}
+
+\section{The meta-circular evaluator}
+
+The subset of Scheme that we chose for the purpose of this work
+is powerful enough to express itself \footnote{As it was noted
+  by Christian Queinnec, ``literature about Lisp rarely resists
+  that narcissistic pleasure of describing Lisp in Lisp''\cite{Queinnec1996},
+  and here we make no exception.}
+
+Since in this setup Scheme is used as both the language that we
+talk about and the language that we use to describe that language,
+this construct is called a \textit{meta-circular evaluator}, as
+Scheme becomes a \textit{metalanguage} for \textit{itself}.
+
+As a result, everything that has been said in this chapter about
+the semantics of Scheme, can be worded more precisely and rigorously
+using a formal notation.
+
+In order to make the code clearer, we shall restrict the object
+language even more. First, we shall assume, that the \texttt{define}
+form does not appear in our program. Indeed, a mechanical procedure
+for transforming a program containing the \texttt{define} forms
+into a program that only uses \texttt{lambda}, \texttt{let} and
+\texttt{let*} (and a fixed-point combinator) is given in the appendix
+\ref{Y-lining}.
+
+Also, for the sake of brevity, we shall ignore the issues
+concerning user-defined syntactic extensions. We shall also
+assume that the programs do not reuse either of the syntactical
+keywords (like \texttt{quote} or \texttt{lambda} or \texttt{if}),
+so for example we shall not be concerned with programs such as
+\begin{Snippet}
+  ((lambda (lambda)
+      (lambda lambda))
+   (lambda (quote)
+      (quote quote)))
+\end{Snippet}
+
+There is a general technique commonly referred to as
+\textit{$\alpha$-conversion}\cite{SussmanSteele1976} for dealing with
+cases like this (where each of the variables bound with the
+\texttt{lambda} form or its derivative is renamed before the evaluation).
+
+Lastly, we will assume that no derivative forms such as \texttt{let},
+\texttt{let*}, \texttt{match}, \texttt{quasiquote}, \texttt{and}
+or \texttt{or} are used in the evaluated program, i.e. that all such
+forms have been expanded prior to the evaluation. The appendix \ref{expander}
+explains in detail how these derivative forms can be converted
+to primitive forms.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{The core evaluator}
+
+The core of our evaluator is the \texttt{value} function, which
+produces the value of a given expression. It consists of a case
+analysis over the structure of expression. In particular,
+the ability to create new procedures using the \texttt{lambda}
+form plays the key role for the language's expressive power.
+
+In order to manipulate the procedures, we need to come
+up with some way of representing them. Since the only
+types of objects that are available in our language are
+symbols, numbers, pairs and procedures, we'd need
+to form our representation from some combination
+of them\footnote{There would be very little point in using procedures
+to represent procedures, as the main purpose of our
+evaluator is to explain how the procedures work -- therefore,
+we ought to express compound procedure application without
+resorting to primitive procedure application (unless we apply
+primitive procedures)}.
+
+We decided to represent procedures as tagged list, whose first
+element is a special symbol \texttt{procedure-tag}\footnote{
+Ideally, user should not be able to input the tag in one's own code,
+as it could disrupt the operation of the evaluator, but
+in practice that doesn't matter much, because the semantics of
+Scheme does not allow to apply lists, so we can choose an
+arbitrary symbol as the tag, and the only undesired consequence
+is that the evaluator will try to evaluate expressions of the form
+\texttt{(('procedure-tag other-data ...)\,\,arguments)
+}}:
+
+\begin{Snippet}
+(define (value expression environment)
+  (match expression
+    (('lambda args body)
+     `(procedure-tag ,args ,body ,environment))
+\end{Snippet}
+\begin{Snippet}    
+    (('quote literal)
+     literal)
+\end{Snippet}
+\begin{Snippet}        
+    (('if condition consequent alternative)
+     (if (value condition environment)
+         (value consequent environment)
+     ;else
+         (value alternative environment)))
+\end{Snippet}
+\begin{Snippet}    
+    ((operator . operands)
+     (let ((procedure (value operator environment))
+           (arguments (map (lambda (operand)
+                              (value operand environment))
+			   operands)))
+         (application procedure arguments)))
+\end{Snippet}
+\begin{Snippet}    
+    (_
+     (cond ((symbol? expression)
+            (lookup expression environment))
+           ((number? expression)
+            expression)
+           (else
+            (error 'unrecognized-expression expression))))
+    ))
+\end{Snippet}
+
+The most important thing that is left is to explain how
+the procedure application occurs: first, we should extend
+the original environment of the procedure with the values
+of arguments, and then execute the program defined in
+the body of the \texttt{lambda} form. (The only
+exception concerns the primitive functions, which are
+going to be handled using the primitive \texttt{apply})
+
+\begin{Snippet}
+(define (application procedure arguments)
+  (match procedure
+    (('procedure-tag parameters body closure)
+     (let ((environment `(,(tie parameters arguments) . ,closure)))
+       (value body environment)))
+    (_ ; a primitive procedure
+     (apply procedure arguments))))
+\end{Snippet}
+
+\subsection{Representing environments}
+
+As it was suggested in the \texttt{application} procedure, we represent
+the environment as a list of \emph{frames}, where each frame is a list
+of two-element \texttt{(key\,\,value)} lists\footnote{
+  Traditionally, frames would rather be represented as lists of dotted
+  pairs of the form \texttt{(key\,\,.\,\,value)} (so-called \textit{assoc lists}),
+  because it would allow to represent a single entry using a single cons
+  cell, whereas the \texttt{(key value)} list normally uses two cons
+  cells. However, since data structure optimization is the core theme
+  of this work, we don't value such arguments too much. We believe that
+  improper lists should only be used for constructing and destructuring
+  lists, and that actual data should only be stored using proper lists
+  (unless the data stored represents the Scheme source. However, even
+  on such occasions we could treat the dot as a special symbol, rather
+  than a part of syntax).
+  Note also, that another popular representation of frames consists
+  of two lists, where the first contains symbols' names, and the
+  second consists of the corresponding values, for example
+  \texttt{((a b c) (1 2 3))}. This representation is often called
+  \textit{a rib cage}\cite{Dybvig1987}.
+}.
+
+\begin{Snippet}
+(define (lookup-frame name frame)
+  (match frame
+    (((key value) . rest)
+     (if (equal? key name)
+       `(,key ,value)
+     ;else
+       (lookup-frame name rest)))
+    (()
+     #false)))
+\end{Snippet}
+\begin{Snippet}    
+(define (lookup name environment)
+  (let (((frame . frames) environment))
+    (match (lookup-frame name frame)
+      ((key value)
+       value)
+      (_
+       (lookup name frames)))))
+\end{Snippet}
+
+The \texttt{tie} function ties the parameter names with their
+values, extending a given environment. Although it is not required
+by the Scheme standard, the \texttt{tie} function can be defined
+to support destructured bindings:
+
+\begin{Snippet}
+(define (tie names values)
+  (match names
+    (()
+     '())
+    ((name . other-names)
+     (let (((value . other-values) values))
+       `(,@(tie name value) . ,(tie other-names other-values))))
+    (rest
+     `((,rest ,values)))))
+\end{Snippet}
+
+The initial environment should contain all the primitive functions
+available in the language. In the simplest case, it should be sufficient
+to define it as
+
+\begin{Snippet}
+  (define initial-environment
+    `(((cons ,cons)
+       (car ,car)
+       (cdr ,cdr)
+       (eq? ,eq?)
+       (pair? ,pair?)
+       (number? ,number?)
+      ;; ...
+      )))
+\end{Snippet}
+
+to use the underlying representation of primitive data structures.
+In the following chapter we will try to explain how the
+primitive data structures can be implemented.

@@ -1,0 +1,1175 @@
+\chapter{Reasoning about programs}
+
+In the previous chapter we have seen how an arbitrary Scheme program
+can be transformed to a particular form that has certain properties
+which make it suitable for execution on a sequential machine. In particular,
+this form specified the order of evaluation of arguments, which would
+otherwise be unspecified\footnote{Note that in general leaving the
+  order of evaluation unspecified is a good thing, because it allows
+  to conceive interesting evaluation strategies.}.
+
+In this chapter, we will present a broader class of Scheme to Scheme
+transformations, called \textit{equational reasoning}.
+
+As the name suggests, the purpose of these transformations is
+\textit{reasoning}, that is, drawing certain conclusions about programs.
+
+Broadly speaking, we have already seen a simple example of a reasoning system,
+namely -- the evaluator itself, which allowed us to conclude the values
+of expressions for given arguments.
+
+However, this system only allowed us to conclude about some very specific
+properties, like, that the value of expression \texttt{(+ 2 2)} is the
+number \texttt{4}.
+
+For the purpose of this work, we would like to be able to prove our
+claims about some more abstract properties of our program, like that
+the \texttt{qsort} function actually sorts a given sequence, or that
+at least the length of its output is the same as the length of its
+input, and that all the elements that were present in the input
+are also present in the output.
+
+\section{Basic terminology}
+
+Following the tradition, we shall call an expression whose
+logical value may be \texttt{\#false} or \texttt{\#true},
+a \textit{proposition} or a \textit{sentence}.
+
+A \texttt{lambda} expression whose application is a proposition
+is called a \textit{sentential form} or a \textit{predicate}.
+For example, \texttt{(lambda (x y) (= (+ x y) (+ y x)))} is
+a sentential form.
+
+A sentential form that is true for all arguments is called
+a \textit{theorem}. A sentential form that is suspected
+to be a theorem is called a \textit{claim} or a \textit{conjecture}.
+
+In order to verify that a conjecture is a theorem, we need to
+construct a \textit{proof}. Pragmatically, a proof is an argument
+whose purpose is to convince us about the validity of a certain
+claim. However, the advances in logic and meta-mathematics
+resulted in a more formal concept of a proof as a mathematical object
+that is constructed according to certain rules, called
+\textit{rules of inference}. Typically, such proofs refer to
+theorems whose validity is claimed to be obvious or that have
+a foundational role to a theory. Such theorems are called
+\textit{axioms}. For example, \texttt{(lambda (x y) (equal?\,\,(car
+  (cons x y)) x))} may be an axiom.
+
+Proofs may also refer to other theorems that have been proved
+earlier. Used in such way, those theorems are typically called
+\textit{lemmas}.
+
+Of course, the fact that we can construct proofs as mathematical
+objects is insufficient for us to accept their validity. First
+and foremost, we must accept the validity of the rules of inference
+proposed by a particular formal system and decide whether they
+conform to our intuition. Since different people may have different
+intuitions, we expect that there be no agreement with regard to
+the choice of a particular formal system, and it must inevitably
+be left to the reader to decide whether the ``proofs'' presented
+here are actually proofs.
+
+There are, however, certain properties that our formal systems
+may or may not have, that are helpful in judging their usefulness.
+Logicians consider, for example, whether their formal systems
+are \textit{sound} (i.e. whether their rules allow us to only
+prove formulas that are actually true) and \textit{complete}
+(i.e. whether they allow us to prove all true formulas that
+can be expressed in our language). For more details,
+see \cite{Ben-Ari2012}.
+
+\section{The reasoning system}
+
+In this section, we are going to present a reasoning system
+based on the work of Boyer and Moore\cite{BoyerMoore1988}.
+The rules and axioms are taken from \cite{FriedmanEastlund2015},
+which is a very accessible hands-on introduction to the topic\footnote{
+  Thank you, Daniel Friedman and Carl Eastlund.}.
+
+The axioms/theorems have the following form: \\
+
+\texttt{<theorem> ::= (lambda (x$_1$\,\,$...$\,\,x$_n$) <rule>);}
+
+\begin{Snippet}
+   <rule> ::= (equal? <expression> <expression>)
+            | (if <expression> <rule> <expression>)
+            | (if <expression> <expression> <rule>);
+\end{Snippet}
+
+where \texttt{x$_1$\,\,$...$\,\,x$_n$} are distinct variables (symbols) and
+\texttt{<expression>} can be any Scheme expression (in particular,
+it can also be a \texttt{<rule>}).
+
+That is, the body of a theorem contains an application
+of the \texttt{equal?} predicate, possibly nested in
+\texttt{<then>} or \texttt{<else>} branches of a series
+of nested \texttt{if} expressions.
+
+The \texttt{<condition>}s of the \texttt{if} expressions
+of a \texttt{<rule>} are called \textit{premises}, and the
+final \texttt{<rule>} consisting of the application of
+\texttt{equal?} predicate is called a \textit{conclusion}.
+
+As mentioned earlier, we differentiate between axioms and
+theorems in that we require no proof of the former. We shall
+express this difference by saying that we \texttt{assume}
+the axioms (or, to be exact, their validity), whereas the
+validity of theorems is \texttt{assure}d\footnote{
+  Choosing two names that only differ with a single
+  character to denote two completely opposite notions may
+  not seem to be a very good idea. We are drawing inspiration
+  here from the creator of the Scala programming language,
+  Martin Odersky, who did the same thing choosing the names
+  \texttt{val} and \texttt{var} for declaring immutable
+  and mutable variables, respectively.
+  We are hoping that, since the worst ideas in Computer
+  Science seem to also be the ones that last the longest,
+  this work would actually turn out to be influential in
+  some regards.
+}.
+
+We shall assume, that a form \texttt{(if <condition> <conclusion>)}
+is an abbreviation of \texttt{(if <condition> <conclusion> \#true)}.
+
+\subsection{The core axioms}
+
+The core axioms of the system concern the \texttt{if} form
+and the \texttt{equal?} predicate:
+
+\begin{Snippet}
+  (define (equal-same x)
+    (equal? (equal? x x) #true))
+
+  (assume equal-same)
+\end{Snippet}
+\begin{Snippet}
+  (define ((commutative? operator) x y)
+    (equal? (operator x y) (operator y x)))
+
+  (assume (commutative? equal?))
+\end{Snippet}
+\begin{Snippet}
+  (define (equal-if x y)
+    (if (equal? x y) (equal? x y)))
+
+  (assume equal-if)
+\end{Snippet}
+\begin{Snippet}
+  (define (if-true then else)
+    (equal? (if #true then else) then))
+
+  (assume if-true)
+\end{Snippet}
+\begin{Snippet}
+  (define (if-false then else)
+    (equal? (if #false then else) else))
+
+  (assume if-false)
+\end{Snippet}
+\begin{Snippet}
+  (define (if-same condition then/else)
+    (equal? (if condition then/else then/else)
+            then/else))
+
+  (assume if-same)
+\end{Snippet}
+\begin{Snippet}
+  (define (if-nest-then condition then else)
+    (if condition
+        (equal? (if condition then else) then)))
+
+  (assume if-nest-then)
+\end{Snippet}
+\begin{Snippet}
+  (define (if-nest-else condition then else)
+    (if condition
+        #true
+        (equal? (if condition then else) else)))
+
+  (assume if-nest-else)
+\end{Snippet}
+
+The rule of inference is a bit complex, so it should be instructive
+to see how it works before specifying it formally.
+
+Note that the \texttt{if-nest-else} rule is formulated in a slightly
+strange manner, because it contains \texttt{\#true} in the \texttt{if}'s
+\texttt{<then>} position. We suspect that this is a way of writing
+a negation, and that the axiom could equivalently be written as
+\begin{Snippet}
+  (define (if-nest-else* condition then else)
+    (if (not condition)
+      (equal? (if condition then else) else)))
+\end{Snippet}
+
+where the \texttt{not} function is defined as
+\begin{Snippet}
+  (define (not x)
+    (if x #false #true))
+\end{Snippet}
+
+Or, to put it more generally, we suspect that the following sentential
+form that we shall call \texttt{negation-inversion} is a theorem:
+
+\begin{Snippet}
+  (define (negation-inversion condition result)
+    (equal? (if condition #true result)
+            (if (not condition) result)))
+
+  (assure negation-inversion)
+\end{Snippet}
+
+\subsection{Proof of \texttt{negation-inversion}}
+
+Consider the right hand side of the \texttt{equal?} predicate in the
+definition of \texttt{negation-inversion}:
+
+\begin{Snippet}
+  (if (not condition) result)
+\end{Snippet}
+
+By definition of \texttt{not} and our convention regarding
+\texttt{if}, we can rewrite it as
+
+\begin{Snippet}
+  (if (if condition #false #true) result #true)
+\end{Snippet}
+
+Now, by the \texttt{if-same} axiom, we can transform it to the following
+form\footnote{
+  This step may seem surprising at first, because the \texttt{if-same}
+  axiom can be used both to reduce expressions like \texttt{(if condition
+    expression expression)} to \texttt{expression}, and to extend
+  \texttt{expression} to \texttt{(if whatever expression expression)},
+  where \texttt{whatever} can be any expression of our liking. The
+  technique of rewriting \texttt{(if condition then else)} as
+  \texttt{(if condition (if condition then else) (if condition then else))}
+  is called \textit{If Lifting}\cite{FriedmanEastlund2015}.
+}:
+
+\begin{Snippet}
+  (if condition
+      (if (if condition #false #true) result #true)
+      (if (if condition #false #true) result #true))
+\end{Snippet}
+
+We can now use the \texttt{if-nest-then} to rewrite the \texttt{<condition>}
+of the \texttt{<then>} branch of the main \texttt{if} expression:
+
+\begin{Snippet}
+  (if condition
+      (if #false result #true)
+      (if (if condition #false #true) result #true))
+\end{Snippet}
+
+Likewise, we can transform the \texttt{<condition>} of the
+\texttt{<else>} branch of the main \texttt{if} expression using
+\texttt{if-nest-else}:
+
+\begin{Snippet}
+  (if condition
+      (if #false result #true)
+      (if #true result #true))
+\end{Snippet}
+
+We can now reduce the same \texttt{<then>} branch as before
+using \texttt{if-false}:
+
+\begin{Snippet}
+  (if condition
+      #true
+      (if #true result #true))
+\end{Snippet}
+
+And similarly apply the \texttt{if-true} to the \texttt{<else>}
+branch
+
+\begin{Snippet}
+  (if condition
+      #true
+      result)
+\end{Snippet}
+
+We can now substitute this result to the original context, i.e.
+as the right hand side of the \texttt{equal?} expression from
+the definition of \texttt{negation-inversion}:
+
+\begin{Snippet}
+  (equal? (if condition #true result)
+          (if condition #true result))
+\end{Snippet}
+
+We see that the right hand side is identical to the left hand side,
+which allows us to apply the \texttt{equal-same} rule, yielding
+
+\begin{Snippet}
+  #true
+\end{Snippet}
+
+which concludes our proof.
+
+\subsection{The rules of inference}
+
+We have just seen an example of equational reasoning in practice.
+It should be relatively easy to grasp way we used the axioms
+\texttt{if-same}, \texttt{if-true}, \texttt{if-false} and
+\texttt{equal-same}. What they all share in common is that they
+consist only of a conclusion, i.e. an application of
+the \texttt{equal?} predicate. It should
+be clear, that they allowed us to rewrite a form matching the shape
+of one of the arguments to \texttt{equal?} to the form matching
+the shape of the other argument.
+
+The axiom \texttt{if-nest-then} and \texttt{if-nest-else} are
+a bit more tricky, though, because in addition to a conclusion,
+they contain a premise. Therefore we were allowed apply the
+\texttt{if-nest-then} axiom only because there was an expression
+whose shape matched one of the conclusion's arguments, and
+this expression lied on a \texttt{<then>} branch of a matching
+conclusion.
+
+We will try to express this rule formally in the Scheme
+programming language.
+
+In the above proof, we have only been showing a part of the
+expression that was actually of a concern to us, but we should
+remember, that in each step we were actually rewriting a whole
+expression, so for example the substitiution of the definition
+of \texttt{not} should be written as a transformation which
+converts the expression\footnote{We use the square brackets
+  here to signify focused expressions. As noted in chapter 3,
+  Scheme reader makes no distinction between round and square
+  brackets, as long as the opening bracket matches the shape
+  of the closing one.}
+
+\texttt{(equal?\,\,(if condition \#true result) \\
+\-\ \ \ \ \ \ \ \ \ \ \ (if \textbf{[not condition]} result))}
+
+into
+
+\texttt{(equal?\,\,(if condition \#true result) \\
+\-\ \ \ \ \ \ \ \ \ \ \ (if \textbf{[if condition \#false \#true]} result))}
+
+We shall therefore need some means for selecting the sub-expression
+that is going to be subject to our rule. In the above example, the
+expression \texttt{(not condition)} is the first argument to the second
+argument of the main expression, which could be written as
+\texttt{(2 1)}, and read as ``take the second argument, and then take
+the first argument'' (the operator itself is the ``zeroth'' argument).
+Such sequence of indices will henceforth be called a \textit{path}
+of a sub-expression.
+
+We could define a selector function that takes an expression
+and a path, and returns a sub-expression pointed to by that path\footnote{
+  It should be easy to see that the \texttt{focus} function could also
+  be defined using \texttt{fold-left} over \texttt{list-ref}: \\
+  \texttt{(define (focus expression path) \\
+    \-\ \ (fold-left list-ref expression path))}
+}:
+
+\begin{Snippet}
+  (define (focus expression path)
+    (match path
+      (()
+       expression)
+      ((index . next)
+       (focus (list-ref expression index) next))))
+\end{Snippet}
+
+The core function for our reasoning system should take an expression,
+a path to its sub-expression of our interest, and an axiom with a hint
+specifying how it is meant to be used, and it should return an expression
+with the sub-expression transformed appropriately. For example,
+
+\begin{Snippet}
+  (rewrite '(equal? (if condition #true result)
+                    [if (if condition #false #true)
+                        result
+                        #true])
+           '(2)
+           '(if-same condition
+                     (if (if condition #false #true)
+                         result
+                         #true)))
+\end{Snippet}
+
+should return the expression
+
+\begin{Snippet}
+  (equal? (if condition #true result)
+          [if condition
+              (if (if condition #false #true)
+                  result
+                  #true)
+              (if (if condition #false #true)
+                  result
+                  #true)])
+\end{Snippet}
+
+and
+
+\begin{Snippet}
+  (rewrite '(equal? (if condition #true result)
+                    (if condition
+                       (if [if condition #false #true]
+                           result
+                           #true)
+                       (if (if condition #false #true)
+                           result
+                           #true)))
+           '(2 2 1)
+           '(if-nest-then condition #false #true))
+\end{Snippet}
+
+should evaluate to
+
+\begin{Snippet}
+  (equal? (if condition #true result)
+          (if condition
+              (if #false
+                  result
+                  #true)
+             (if (if condition #false #true)
+                  result
+                  #true)))
+\end{Snippet}
+
+Note also, that the rule of inference needs to be able to access
+the axioms, theorems and definitions that we refer to. However,
+since it would be inconvenient to pass them around to the
+\texttt{rewrite} function, we will make use of extension to Scheme
+known as \textit{parameters}\cite{SRFI-39}, and have
+the \texttt{current-book} parameter default to the core axioms
+and definitions.
+
+In our rewriting rule, we need to differentiate between theorems
+(including axioms) and definitions, because, in the case of the
+definitions, we can only replace \textit{definiendum} with
+the corresponding \textit{definiens}, while in the case of theorems,
+we can replace one side of the \textit{conclusion} with the other
+(this distinction should make it clear why we decided to mark
+axioms and theorems using the \texttt{assume} and \texttt{assure}
+keywords):
+
+\begin{Snippet}
+  (define (rewrite expression path rule)
+    (if (theorem? rule)
+      (rewrite-theorem expression path rule)
+    ;else
+      (rewrite-definition expression path rule)))
+\end{Snippet}
+
+where \texttt{theorem?} checks in the \texttt{current-book}
+whether a given rule has been declared as a theorem or axiom.
+
+When rewriting a definition, we simply substitute
+arguments with corresponding values in the body of
+\texttt{lambda} expressions:
+
+\begin{Snippet}
+  (define (rewrite-definition expression path application)
+    (assert (equal? application (focus expression path)))
+    (let* ((function (function-name application))
+           (definiens (function-body function))
+           (arguments (function-arguments function))
+           (values (subject application))
+           (substitution (substitute arguments values definiens)))
+      (replace-subexpression expression path substitution)))
+\end{Snippet}
+
+the \texttt{function-name} retrieves the name of function referred
+to in an application. The \texttt{function-body}
+and \texttt{function-arguments} return the body and arguments
+of a \texttt{lambda} expression with a given name. They ought to refer
+to the \texttt{current-book} and their exact definitions would depend on
+the particular representation of a book.
+
+The \texttt{subject} of an application is a list of all values
+that the function is applied to.
+
+The \texttt{substitute} procedure could be defined in the following
+way\label{substitute}:
+
+\begin{Snippet}
+  (define (substitute variables values expression)
+    (match expression
+      (('quote _)
+       expression)
+      ((head . tail)
+       `(,(substitute variables values head)
+         . ,(substitute variables values tail)))
+      (_
+       (or (any (lambda (variable value)
+                  (and (equal? variable expression)
+		       value))
+	        variables values)
+	   expression))))
+\end{Snippet}
+
+However, in order for it to be correct, the \texttt{expression}
+must not contain \texttt{lambda} expressions whose argument list
+would contain the symbol \texttt{lambda}, the symbol \texttt{quote}
+or any of the symbols contained in the \texttt{variables} list
+(this condition can be assured by systematic $\alpha$ renaming
+of all the bound variables of a program \cite{SussmanSteele1976}).
+
+The \texttt{replace-subexpression} function is defined as follows:
+
+\begin{Snippet}
+  (define (replace-subexpression expression path replacement)
+    (match path
+      ((index . subpath)
+       (let ((prefix (take expression index))
+             ((subexpression . suffix) (drop expression index)))
+         `(,@prefix
+           ,(replace-subexpression subexpression subpath
+			           replacement)
+	   ,@suffix)))
+      (()
+       replacement)))
+\end{Snippet}
+
+Lastly, we're set to explain how to \texttt{rewrite-theorem}.
+
+First, we need to substitute the body of the theorem with
+the supplied arguments, just like we did for definitions.
+Then we need to find the possible conclusions of the theorem
+and see (1) whether they are \texttt{equal?} to any of the
+arguments to \texttt{equal?} and (2) whether the premises
+required by the theorem are satisfied at the point of the
+occurrence of the term in focus.
+
+The \texttt{conclusions+premises} returns a list of tuples.
+of the form \texttt{[conclu\-sion required-premises
+    discarded-premises]}.
+
+\begin{Snippet}
+  (define (conclusions+premises theorem)
+    (match theorem
+      (('equal? _ _)
+       `([,theorem () ()]))
+  
+      (('if condition consequent alternative)
+       `(,@(map (lambda ([conclusion required discarded])
+                  `[,conclusion
+                    ,(union condition required)
+                    ,discarded])
+                (conclusions+premises consequent))
+         ,@(map (lambda ([conclusion required discarded])
+                  `[,conclusion
+                    ,required
+                    ,(union condition rejected)])
+                (conclusions+premises alternative))))
+
+      (_
+       '())))
+\end{Snippet}
+
+(Note that the code assumes that all the derived special forms such as
+\texttt{and}, \texttt{or} and single-armed \texttt{if} are
+expanded).
+
+For example, \texttt{conclusions+premises} of the body of
+\texttt{if-nest-then}, i.e.
+
+\begin{Snippet}
+  (conclusions+premises
+   '(if condition
+        (equal? (if condition then else) then)
+        #true))
+\end{Snippet}
+
+is the list containing a single tuple:
+
+\begin{Snippet}
+  ([(equal? (if condition then else) then) (condition) ()])
+\end{Snippet}
+
+and the value for the body of \texttt{if-nest-else} is also
+a singleton list:
+
+\begin{Snippet}
+  ([(equal? (if condition then else) else) () (condition)])
+\end{Snippet}
+
+We also need to know which premises are satisfied or refuted
+in the context of our focus:
+
+\begin{Snippet}
+  (define (premises expression path)
+    (match `(,expression ,path)
+      ((_ ())
+       '[() ()])
+    
+      ((('if condition consequent _) (2 . subpath))
+       (let (([satisfied refuted] (premises consequent subpath)))
+         `[,(union `(,condition) satisfied) ,refuted]))
+    
+      ((('if condition _ alternative) (3 . subpath))
+       (let (([satisfied refuted] (premises alternative subpath)))
+         `[,satisfied ,(union `(,condition) refuted)]))
+    
+      ((_ (index . subpath))
+       (premises (list-ref expression index) subpath))))
+\end{Snippet}
+
+The \texttt{premises} function returns a tuple \texttt{[satisfied refuted]}.
+For example, the \texttt{premises} of expression
+
+\begin{Snippet}
+  '(if c
+       (if a
+           '(2 2)
+           '(2 3))
+       (if b
+           '(3 2)
+           '(3 3)))
+\end{Snippet}
+
+at focus \texttt{(2 2)} are \texttt{[(a c) ()]}, at focus \texttt{(2 3)}
+-- \texttt{[(c) (a)]}, at focus \texttt{(3 2)} -- \texttt{[(b) (c)]} and
+-- at focus \texttt{(3 3)} -- \texttt{[() (b c)]}.
+
+In order to \texttt{rewrite-theorem}, we require that the required
+premises be a subset of the satisfied premises, and that the discarded
+premises be a subset of refuted premises.
+
+For pragmatic reasons, we also require that there be only a single
+conclusion in a theorem that can be used to perform a rewrite (i.e.
+whose premises and conclusion match). Otherwise we wouldn't know
+which conclusion should be chosen.
+
+\begin{Snippet}
+  (define (rewrite-theorem expression path rule)
+    (let* ((theorem (function-name rule))
+           (definiens (function-body theorem))
+           (arguments (function-arguments theorem))
+           (values (subject rule))
+           (instance (substitute arguments values definiens))
+           (term (focus expression path))
+           ([satisfied refuted] (premises expression path))
+           (basis (filter
+                    (lambda ([conclusion required discarded])
+                      (let ((('equal? left right) conclusion))
+                        (and (or (equal? term left)
+                                 (equal? term right))
+                             (subset? required satisfied)
+                             (subset? discarded refuted))))
+                    (conclusions+premises instance)))
+           (([conclusion _ _]) basis)
+           (('equal? left right) conclusion)
+           (substitution (if (equal? left term) right left)))
+      (replace-subexpression expression path substitution)))
+\end{Snippet}
+
+Although the rule is rather lengthy, its form should be straightforward
+to analyze. The first few lines (up to the binding containing \texttt{instance})
+are actually the same as in the \texttt{rewrite-definition} function
+(in the programmer's craft this would suggest that they should be
+extracted to a separate function). The rest of the code is concerned
+with matching the premises from theorem with those from the context of
+\texttt{expression}. The variable \texttt{basis} captures the list
+of matching conclusions. The binding \texttt{(([conclusion \_ \_]) basis)}
+assumes that this list contains exactly one element, and if this assumption
+was not satisfied, it would raise an error.
+
+\subsection{Proof checking}
+
+The \texttt{rewrite} procedure provides us with means of performing
+a single inference step. We could use it to build a program that
+performs a proof checking:
+
+\begin{Snippet}
+  (define (verify conjecture proof)
+    (equal? (fold-left (lambda (term (path rule))
+                          (rewrite term path rule))
+                       conjecture proof)
+            #true))
+\end{Snippet}
+
+Now we can state the proof of \texttt{negation-inversion} more formally:
+
+\begin{Snippet}
+  (verify '(equal? (if condition #true result)
+                   (if (not condition) result #true))
+    '(((2 1)   (not condition))
+      ((2)     (if-same (if condition
+                            (if (if condition #false #true)
+                                result
+                                #true)
+                            (if (if condition #false #true)
+                                result
+                                #true))
+                        (if (if condition #false #true)
+                            result
+                            #true)))
+      ((2 2 1) (if-nest-then condition result #true))
+      ((2 3 1) (if-nest-else condition result #true))
+      ((2 2 1) (if-false result #true))
+      ((2 3 1) (if-true result #true))
+      ((0)     (equal-same (if condition #true result)))))
+\end{Snippet}
+
+\section{Totality}
+
+The \texttt{rewrite-definition} function assumed that there is nothing
+wrong with replacing an application of a function with the body of that function,
+where formal arguments are replaced with values being applied to -- just
+as in most circumstances there was nothing wrong with replacing an application
+of a function to some arguments with the actual value of that function for
+those arguments.
+
+However, it is not obvious that a function actually has a value.
+Consider the following definition:
+
+\begin{Snippet}
+  (define (partial x)
+    (not (partial x)))
+\end{Snippet}
+
+In an attempt of computing the value of the expression, say,
+\texttt{(partial partial)}, the evaluator will never terminate.
+
+The function \texttt{partial} is not a total function, because it
+does not have a defined value for every argument (as a matter of fact,
+it doesn't have a definite value for \textit{any} argument), and consequently,
+a program whose value relies on the value of \texttt{partial} function may
+itself have no definite value.
+
+The Boyer-Moore system doesn't allow to expand the definitions
+of functions that were not proven to be total, because they could be
+used to prove a contradiction\cite{FriedmanEastlund2015}, thereby
+depriving the deductive system of its cognitive value. Therefore, in
+order to be able to \texttt{rewrite-definition} in a legitimate way,
+it is required that a \textit{totality claim} for that function is proven
+first.
+
+While it is impossible to provide a universal function that would claim
+whether a given function is total, there exist certain classes of functions
+for which it is possible to derive such proofs by purely mechanical means.
+
+In the case of recursive functions it is easy to see that if an argument
+that is used as a base case for recursion shrinks (in some general sense)
+by one unit towards the base case with each recursive call, then
+the function will eventually reach its base case and terminate\footnote{
+  Note that, especially in lazy languages, there are functions that
+  do not satisfy this condition, but have a definite value nevertheless.
+  Consider, for example, the definition:
+  
+  \texttt{(define (numbers-from start) \\
+    \-\ \ \ (cons start (numbers-from (+ start 1))))
+  }
+
+  While this function may call itself potentially indefinitely many times,
+  it is total (in the domain of numbers).
+}.
+
+This ``general sense of argument shrinking'' is called a \textit{measure}
+of a function, which is a function that maps arguments to natural numbers.
+For many arithmetic functions, a common measure is just the identity
+function. For functions whose arguments are structures/expressions, the
+measure can be defined as
+
+\begin{Snippet}
+  (define (size x)
+    (if (pair? x)
+      (+ 1 (size (car x)) (size (cdr x)))
+    ;else
+      0))
+\end{Snippet}
+
+although -- since it is defined recursively -- we cannot resort
+to that definition in proving its own totality claim, and therefore
+we need to assume it.
+
+Instead, we can characterize it with the following axioms:
+
+\begin{Snippet}
+  (define (natural?/size x)
+    (equal? (natural? (size x)) #true))
+
+  (assume natural?/size)
+\end{Snippet}
+\begin{Snippet}
+  (define (size/car x)
+    (if (pair? x)
+      (equal? (< (size (car x)) (size x)) #true)))
+
+  (assume size/car)
+\end{Snippet}
+\begin{Snippet}
+  (define (size/cdr x)
+    (if (pair? x)
+      (equal? (< (size (cdr x)) (size x)) #true)))
+  
+  (assume size/cdr)
+\end{Snippet}
+
+The following function can be used to obtain the totality claim
+for any recursive function\footnote{Note however, that it does
+  not support mutual/nested recursion, nor recursion obtained
+  from a fixed point combinator (which itself isn't a total
+  function).}:
+
+\begin{Snippet}
+  (define (totality-claim name args body measure)
+
+    (define (claim expression)
+      (match expression
+        (('quote _)
+         #true)
+
+        (('if condition consequent alternative)
+         `(and ,(claim condition)
+	       (if ,condition
+		   ,(claim consequent)
+		   ,(claim alternative))))
+
+        ((function . arguments)
+         (if (equal? function name)
+	     `(and (< ,(substitute args arguments measure) ,measure)
+		   . ,(map claim arguments))
+         ;else
+	     `(and . ,(map claim arguments))))
+        (_
+         #true)))
+
+    `(and (natural? ,measure)
+	   ,(claim body)))
+\end{Snippet}
+
+For example, consider the following definition:
+
+\begin{Snippet}
+  (define (append a b)
+    (if (pair? a)
+      (cons (car a) (append (cdr a) b))
+    ;else
+      b))
+\end{Snippet}
+
+We can obtain its totality claim by evaluating
+
+\begin{Snippet}
+  (totality-claim 'append '(a b)
+    '(if (pair? a)
+        (cons (car a) (append (cdr a) b))
+        b)
+    '(size a))
+\end{Snippet}
+
+which produces
+
+\begin{Snippet}
+  (and (natural? (size a))
+       (and (and #true)
+            (if (pair? a)
+                (and (and #true)
+                     (and (< (size (cdr a)) (size a))
+                          (and #true)
+                          #true))
+                #true)))
+\end{Snippet}
+
+Apparently, our \texttt{totality-claim} contains many redundant
+\texttt{(and \#true)} and \texttt{\#true} conditions. They can be easily
+removed by expanding \texttt{and} to \texttt{if} and applying the
+\texttt{if-true} axiom:
+
+\begin{Snippet}
+  (if (natural? (size a))
+      (if (pair? a)
+          (< (size (cdr a)) (size a))
+          #true)
+      #false)
+\end{Snippet}
+
+The proof is done by applying the \texttt{natural?/size} and \texttt{if-true}
+axioms, which allow us to rewrite this formula as
+
+\begin{Snippet}
+  (if (pair? a)
+      (< (size (cdr a)) (size a))
+      #true)
+\end{Snippet}
+
+and \texttt{size/cdr} allows to reduce the expression to
+
+\begin{Snippet}
+  (if (pair? a)
+      #true
+      #true)
+\end{Snippet}
+
+It is now easy to see that this expression is \texttt{equal?}\,\,to
+\texttt{\#true} (by \texttt{if-same}).
+
+\section{Induction and recursion}
+
+A typical recursive definition consists of one or more base case,
+and a rule which explains how to construct/analyze a more
+complex object from/in terms of simpler objects.
+
+When we want to prove that a recursive function possesses a certain
+property, it is sufficient to prove that it possesses that property
+for the simplest cases, and that the recursive transformation preserves
+that property.
+
+The proofs that have this structure are called \textit{inductive proofs}
+or \textit{proofs by induction}. More specifically, an inductive proof
+of a claim regarding a recursive function is a proof of an
+\textit{inductive claim}.
+
+It is not always obvious what the inductive claim for a given claim
+should be. In general, the structure of an inductive claim should
+somehow correspond to the structure of recursion of one or more
+functions involved in that claim.
+
+\subsection{List induction}
+
+A particularly common case of induction is called a \textit{list induction}.
+We say that an object is a \texttt{list?} either if it is \texttt{equal?}
+to \texttt{'()}, or if it is a \texttt{pair?} whose \texttt{cdr} is
+a \texttt{list?}:
+
+\begin{Snippet}
+  (define (list? l)
+    (or (equal? l '())
+        (and (pair? l)
+             (list? (cdr l)))))
+\end{Snippet}
+
+It therefore seems natural, that an induction over list should
+consider \texttt{'()} as its base case, and the claim should be
+preserved by the \texttt{cons} or \texttt{cdr} operation.
+
+\subsection{An example: associativity of \texttt{append}}
+
+Consider the following theorem regarding the \texttt{append} function
+defined in previous section:
+
+\begin{Snippet}
+  (define (associative?/append l1 l2 l3)
+    (if (and (list? l1) (list? l2) (list? l3))
+        (equal? (append l1 (append l2 l3))
+                (append (append l1 l2) l3))))
+
+  (assure associative?/append)
+\end{Snippet}
+
+\subsubsection{The inductive claim}
+
+List induction over the \texttt{l1} argument provides us with
+the following claim:
+
+\begin{Snippet}
+  (if (equal? l1 '())
+      [if (and (list? l1) (list? l2) (list? l3))
+          (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3))]
+  ;else
+      (if (if (and (list? l1) (list? l2) (list? l3))
+              (equal? (append l1 (append l2 l3))
+                      (append (append l1 l2) l3)))
+          (if (and (list? (cons x l1)) (list? l2) (list? l3))
+              (equal? (append (cons x l1) (append l2 l3))
+                      (append (append (cons x l1) l2) l3)))))  
+\end{Snippet}
+
+\subsubsection{The base case}
+
+It is easy to see that if we substitute \texttt{'()} for
+\texttt{l1} in \texttt{associative?/append} by \texttt{equal-if}
+in the consequent of the main \texttt{if} expression (the base case), we get
+
+\begin{Snippet}
+  (if (and (list? '()) (list? l2) (list l3))
+     (equal? [append '() (append l2 l3)]
+             (append [append '() l2] l3)))
+\end{Snippet}
+
+By expanding the definitions of \texttt{append} in the square
+brackets, we get the consequent of the main \texttt{if} expression
+to become \texttt{(equal?\,\,(append l2 l3) (append l2 l3))}, which
+proves the base case.
+
+\subsubsection{The inductive step}
+
+The inductive step is the alternative of the main \texttt{if}
+expression:
+
+\begin{Snippet}
+  (if (equal? l1 '())
+      #true
+  ;else
+    (if (if (and (list? l1) (list? l2) (list? l3))
+            (equal? (append l1 (append l2 l3))
+                    (append (append l1 l2) l3)))
+        (if (and (list? (cons x l1)) (list? l2) (list? l3))
+            (equal? [append (cons x l1) (append l2 l3)]
+                    (append [append (cons x l1) l2] l3)))))  
+\end{Snippet}
+
+\subsection{Axioms for \texttt{cons}}
+
+In order to prove it, we need to assert some additional axioms which
+establish the relationship between \texttt{cons}, \texttt{car}, \texttt{cdr}
+and \texttt{pair?}:
+
+\begin{Snippet}
+  (define (car/cons x y)
+    (equal? (car (cons x y)) x))
+
+  (assume car/cons)
+\end{Snippet}
+\begin{Snippet}
+  (define (cdr/cons x y)
+    (equal? (cdr (cons x y)) y))
+
+  (assume cdr/cons)
+\end{Snippet}
+\begin{Snippet}
+  (define (pair?/cons x y)
+    (equal? (pair? (cons x y)) #true))
+
+  (assume pair?/cons)
+\end{Snippet}
+\begin{Snippet}
+  (define (cons/car+cdr x)
+    (if (pair? x)
+      (equal? x (cons (car x) (cdr x)))))
+
+  (assume cons/car+cdr)
+\end{Snippet}
+\begin{Snippet}
+  (define (cons-equal-car x y z)
+    (equal? (equal? (cons x z) (cons y z))
+            (equal? x y)))
+
+  (assume cons-equal-car)
+\end{Snippet}
+\begin{Snippet}
+  (define (cons-equal-cdr x y z)
+    (equal? (equal? (cons x y) (cons x z))
+            (equal? y z)))
+
+  (assume cons-equal-cdr)
+\end{Snippet}
+
+\subsubsection{The proof of \texttt{append} continued}
+
+Continuing our proof, we can now substitute the expressions
+\texttt{(append (cons x l1) ...)} with the body of the definition
+of \texttt{append}:
+
+\begin{Snippet}
+  (if (if (and (list? l1) (list? l2) (list? l3))
+          (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3)))
+      (if (and (list? (cons x l1)) (list? l2) (list? l3))
+          (equal? (if [pair? (cons x l1)]
+                      (cons [car (cons x l1)]
+                            (append [cdr (cons x l1)]
+                                    (append l2 l3)))
+                      ###)
+                  (append (if [pair? (cons x l1)]
+                              (cons [car (cons x l1)]
+                                    (append [cdr (cons x l1)] l2))
+                              ###) l3))))
+\end{Snippet}
+
+Some irrelevant bits of the expression were replaced with \texttt{\#\#\#}. They
+appear twice in the alternatives of \texttt{if} expressions whose conditions
+are \texttt{[pair?\,\,(cons x l1)]}, which -- by virtue of
+\texttt{pair?/cons}, are \texttt{equal?} to \texttt{\#true}.
+
+Similarly, the expressions \texttt{[car (cons x l1)]} can be replaced with
+\texttt{x} by \texttt{car/cons}, and \texttt{[cdr (cons x l1)]} can be
+replaced with \texttt{l1} by \texttt{cdr/cons}, yielding
+
+\begin{Snippet}
+  (if (if (and (list? l1) (list? l2) (list? l3))
+          (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3)))
+      (if (and (list? (cons x l1)) (list? l2) (list? l3))
+          (equal? (cons x (append l1 (append l2 l3)))
+                  [append (cons x (append l1 l2)) l3])))
+\end{Snippet}
+
+By applying the same trick to the right-hand side of the innermost
+\texttt{equal?}, we get
+
+\begin{Snippet}
+  (if (if (and (list? l1) (list? l2) (list? l3))
+          (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3)))
+      (if (and [list? (cons x l1)] (list? l2) (list? l3))
+          (equal? (cons x (append l1 (append l2 l3)))
+                  (cons x (append (append l1 l2) l3)))))
+\end{Snippet}
+
+It should be clear that in order to prove the claim, we need to appeal
+to the inductive hypothesis. In order to do so, we first need to unify
+their assumptions. By definition, \texttt{[list?\,\,(cons x l1)]} is true
+if \texttt{(cons x l1)} is either \texttt{'()} or if it is a \texttt{pair?}\,\,
+and its \texttt{cdr} is a \texttt{pair?}. Therefore, the expression
+reduces to \texttt{(pair?\,\,l1)}, making the conditions of inductive
+premise and conclusion identical.
+
+This allows us to perform the \texttt{if-lifting} and transform the whole
+expression to
+
+\begin{Snippet}
+  (if (and (list? l1) (list? l2) (list? l3))
+      (if (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3))
+          [equal? (cons x (append l1 (append l2 l3)))
+                  (cons x (append (append l1 l2) l3)])))
+\end{Snippet}
+
+The application of \texttt{cons-equal-cdr} to the innermost \texttt{equal?}
+yields
+
+\begin{Snippet}
+  (if (and (list? l1) (list? l2) (list? l3))
+      (if [equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3)]
+          (equal? [append l1 (append l2 l3)]
+                  (append (append l1 l2) l3))))
+\end{Snippet}
+
+We can now use the \texttt{equal-if} axiom to rewrite whichever side
+of equality we choose, say, left to right:
+
+\begin{Snippet}
+  (if (and (list? l1) (list? l2) (list? l3))
+      (if (equal? (append l1 (append l2 l3))
+                  (append (append l1 l2) l3))
+          (equal? (append (append l1 l2) l3)
+                  (append (append l1 l2) l3))))
+\end{Snippet}
+
+It now suffices to apply \texttt{equal-same} to the innermost
+\texttt{equal?}\,\,and then \texttt{if-same} two or three times
+to complete the inductive proof.
+
+\section{Conclusion}
+
+The purpose of the proofs presented in this chapter was
+to exemplify some methods that are useful for proving properties
+of programs. It is hard to deny that -- without any assistance from
+computer tools that help to trace nested parentheses -- the structures
+of expressions may seem obscure, and indeed, some more advanced typesetting
+features would certainly be helpful. We hope that the presentation
+was instructive nevertheless.
+
+ACL2, the descendant of the original Boyer-Moore system,
+is capable of proving a large class of theorems about programs automatically
+using some principles that were laid out in this chapter. The source
+codes for ACL2 are publicly
+available\footnote{\url{https://github.com/acl2/acl2}}.
+
+This chapter ends the first part of this work, whose purpose was
+to present various tools that can be helpful for the task that
+we set to ourselves in the first chapter.

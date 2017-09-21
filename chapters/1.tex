@@ -1,0 +1,644 @@
+\chapter{Introduction}
+
+\begin{chapquote}{Lewis Carroll, \textit{Through the Looking Glass}}
+  “When I use a word,” Humpty Dumpty said, in rather a scornful tone,
+  “it means just what I choose it to mean—neither more nor less.”
+\end{chapquote}
+
+\section{Motivation}
+
+Functional programming is a valuable technique for building large
+and reusable software systems. Contrasted with more widespread
+approaches, its main advantage is that it simplifies the reasoning
+about program's behavior. Furthermore, it allows programmers to
+provide less detail about the program, making it susceptible to run
+in various different setups.
+
+\subsection{Historical perspective -- algorithms}
+
+Historically, programmers had to specify computations in terms
+of actions that were to be taken in order to achieve a desired goal.
+Initially, specifications were written in languages specific to
+particular machines being programmed.
+
+This style of thinking -- i.e. specifying a series of steps to
+achieve a certain goal -- gave birth to the branch of Computer
+Science known as Algorithm Design.
+
+Being very diverse, machine languages turned out to be inappropriate for
+communicating algorithms between programmers of different machines.
+For this reason, the FORTRAN and ALGOL families of languages were invented
+as means of conveying the ideas of specific algorithms in a precise
+and uniform manner\cite{Sebesta2008}. In addition, tools existed that allowed
+to run programs written in those languages on real machines, although with
+some performance penalty -- therefore, for performance-critical applications,
+programmers were still writing machine code\cite{Victor2013}.
+
+What those languages had in common is that their main purpose was
+to instruct computer how to perform computations. In addition,
+the means of expression of those languages were designed, so that
+they could easily be translated directly to machine code of most CPUs.
+With time, however, the way of thinking about computers had changed
+significantly. No longer were they just mere tools for performing
+scientific computations, but they were becoming larger and larger
+systems that were expected to run multiple programs simultaneously
+in real time.
+
+Furthermore, the complexity of the applications was only increasing,
+and the old ways of thinking were often insufficient for managing that
+complexity.
+
+As the performance of computers was improving, our requirements
+with regard to programming systems begun to shift. For many applications
+it was no longer necessary to get the maximum performance of every
+CPU cycle, as there were other factors, such as network latency, that
+bounded the overall performance of the application.
+
+Moreover, there turned out to be a physical limit on the clock speed
+of a single CPU core, which caused hardware manufacturers to focus
+on delivering processors with more and more cores of the same speed.
+Consequently, the ability to disperse execution of a program on many
+cores, or even many machines, can often be more profitable than being
+able to perform a few more instructions per second by a sequential
+program.
+
+The abundance of processing power had yet another consequence.
+As programmers no longer had to worry (too much) about computational
+resources, they could experiment more with the means of expression
+of their programming languages. After all, it turned out that the two
+most costly aspects of computer application development were
+(1) programmers' time and (2) programmers' mistakes. It therefore
+seems prudent to focus on shortening the time of application development
+and on minimizing the possibilities of making mistakes.
+
+\subsection{Programming as expressing ideas}
+
+Eventually, the goal of programming is no longer bending computer
+behavior to programmer's will, but describing that will accurately,
+precisely and unambiguously. 
+
+This is an interesting process: programmers experiment with programming
+languages, which in turn provide them with means to think about various
+phenomena, or prompt them to come up with certain ideas. There is
+a harmful byproduct of this process though, namely -- the multitude
+of programming languages available. Computer programmers really are
+in the position of Lewis Carroll's Humpty Dumpty: when they use
+a word, it is them who chooses its meaning, and they can make it
+mean anything they like. The downside of this freedom is that it
+impedes communication, and accordingly -- collaboration.
+
+As a result, a single most valuable trait of a programming language
+-- as a means of communication, as opposed to development of particular
+applications -- is its simplicity. A good programming language should
+be simple to learn, and the programs written in it should be simple
+to understand (as simple, one could say, as possible, but no simpler).
+
+Of course, there is nothing in a programming language alone that
+can prevent a programmer from using it in an obscure way, and therefore
+in addition to the use of appropriate means of expression, programmers
+need to obey a certain discipline, or a set of conventions. Needless
+to say, the conventions themselves should be clear and simple to follow,
+in order to avoid their misinterpretations.
+
+One could ask whether it would be a good idea to use some natural language,
+such as English, to express computer programs. The big advantage of this
+approach is that most people already know at least one natural language,
+their so-called mother tongue.
+
+However, there are some serious drawbacks of that idea. Natural languages
+tend to be vague, verbose, imprecise and structurally ambiguous\footnote{
+  The idea of using natural language to program computers has been criticized
+  at length by Edsger Dijkstra, who concluded that ``machines to be programmed
+  in our native tongues —be it Dutch, English, American, French, German,
+  or Swahili— are as damned difficult to make as they would be to
+  use''\cite{Dijkstra1997}}.
+People realized this fact long before the computer has been conceived, and this
+realization was reflected in the development of the language of mathematics,
+which has complementary advantages to those of natural languages: it is
+usually brief, non-ambiguous and precise\footnote{However, certain problems
+  with the way the language of mathematics is customarily used to lay out
+  physics have been pointed out Gerald Sussman, who proposed to use a programming
+  language for that purpose instead\cite{SICM}.}.
+
+Mark Turner and Gilles Fauconnier, the authors of an important cognitive science
+book ``The Way We Think'', noted that
+
+\begin{quote}
+  The development of formal systems to leverage human invention
+  and insight has been a painful, centuries-long process. [...]
+  In the twelfth century, the Hindu mathematician Bhaskara said,
+  ``The root of the root of the quotient of the greater irrational
+  divided by the lesser one being increased by one; the sum being
+  squared and multiplied by the smaller irrational quantity is the
+  sum of the two surd roots.'' This we would now express in the form
+  of an equation, using the much more systematically manageable set
+  of formal symbols shown below. This equation by itself looks no
+  less opaque than Bhaskara's description, but the notation immediately
+  connects it to a large system of such equations in ways that
+  make it easy to manipulate.\cite{FauconnierTurner2002}
+  \begin{equation*}
+    \sqrt{(\sqrt{\frac{n}{k}}+1)^{2}k}=\sqrt{k}+\sqrt{n}
+  \end{equation*}
+\end{quote}
+
+One could therefore ask whether it might be a better idea to program
+computers in the language of mathematics, and indeed some successful
+attempts were made in this regard.
+
+However, if we look at how the language of mathematics is usually being
+communicated, we find that it is rarely self-contained -- that the concise
+mathematical formulas are often interleaved with more lengthy explanations
+provided in the form of natural language sentences, whether in text
+or near the blackboard. This ``classroom'' or ``handbook'' setup provides
+an explanation for the mathematicians' inclination to use short symbols
+that are easy to write quickly, although they do not, by themselves,
+provide any clues with regard to what they mean or how they should be
+pronounced.
+
+There was an attempt to transplant this ``handbook'' approach to
+the domain of Computer Science called ``Literate Programming'',
+undertaken by the prominent mathematician Donald Knuth\cite{Knuth1992}.
+However, the industry practices show that this approach failed to become
+widespread.
+
+A likely reason for this state of affairs is that it requires
+to maintain the correspondence between the program and its explanation,
+and there are no tools that could enforce this correspondence.
+
+\subsection{Referential transparency}
+
+A computer program, when perceived as a speech act, seems to
+be liberated from some of the constraints of both natural language
+and the language of mathematics, while imposing some of its own
+constraints.
+
+Computer programs are usually written on computers, which aid
+not only in editing and displaying them, but also in paraphrasing
+them (which, in the parlance of programmers, is called
+\emph{refactoring}\cite{Fowler2000}) and proving them correct.
+
+If we look at industry practices, we'll notice, that there are also
+some things that the natural languages have in common with
+the so-called ``industry best practices'': just as there is a great
+deal of redundancy in natural languages, that minimizes the risk
+of misinterpreting an utterance, programmers are recommended
+to augment their programs with redundant features such as tests,
+assertions and type
+signatures\cite{Feathers} \cite{Fowler2000} \cite{HuntThomas2000}
+\cite{Martin2009}.
+
+Another feature that is shared by natural languages and mathematics,
+but has only recently been gaining popularity among computer programmers,
+is called \emph{referential transparency}, and is closely related to
+\emph{the principle of compositionality}.
+
+Referential transparency is a trait of languages' expressions that allows
+to substitute a reference to an object with another reference to the same
+object (or -- if possible -- with that object itself), yielding
+a \emph{co-extensional} expression. For example, in the expression
+\begin{equation*}
+  2 + 2 = 2 * 2
+\end{equation*}
+we can replace both left- and right-hand side of the $=$ sign with
+some other expressions that has the same value, for example
+\begin{equation}
+  2 + 2 = 4.
+\end{equation}
+
+Of course, this rule applies not only to mathematics, but
+to ethnic languages as well. Incidentally, we can replace
+the name \emph{William Shakespeare} with the phrase
+\emph{the author of Hamlet} in an utterance, usually preserving
+its overall meaning.
+
+Referential transparency usually applies to most expressions
+of our everyday language. However, there are two situations
+where it fails: context-sensitive terms (such as the words \emph{this}
+or \emph{you}) and so-called \emph{intensional contexts}\cite{Frege1892}
+(for example, we cannot transform the sentence \emph{Lois Lane
+knows that Clark Kent is Clark Kent} into \emph{Lois Lane knows
+that Clark Kent is Superman}, despite the fact, that both
+\emph{Clark Kent} and \emph{Superman} refer to the same entity).
+
+The programming style that employs referential transparency
+is called \emph{functional programming}, and it allows to
+comprehend the code in terms of the \emph{substitution model
+  of computation}\cite{SICP}.
+
+For example, the following Python code that computes the \emph{factorial}
+function in the so-called \emph{imperative style} contains identifiers
+that are not referentially transparent:
+
+\begin{Snippet}
+  def factorial(n):
+      accumulator = 1 
+      while n > 0:
+          accumulator = accumulator * n
+          n = n - 1
+      return accumulator
+\end{Snippet}
+
+In every iteration, the meanings of the names \texttt{accumulator}
+and \texttt{n} are different: although they are only used in a single
+lexical context, there are many different invisible ``execution contexts'',
+in which those names are used. This phenomenon seems to have no counterpart
+neither in natural languages nor in the language of mathematics, where
+the meanings of words are either fixed, or depend only on some lexical
+context\footnote{The author remembers the following riddle from his
+  childhood. A mean kid asks another kid (a victim): ``I am me, you are you,
+  which of us is the stupid one?''. If the victim responds ``you'', then
+  the mean kid claims that -- according to what they settled earlier -- the
+  identifier ``you'' refers to the victim, so the victim admitted to
+  be the stupid one. On the other hand, if the victim responds ``me'',
+  the mean kid is also laughing, because he made the victim admit to
+  be stupid.
+  Note that in this case, the identifiers ``me'' and ``you'' were
+  not modified. They preserved their original meanings, but they were
+  shadowed by some new meanings, that referred to the old meanings.
+}.
+
+However, the same function can be defined in a referentially transparent
+manner with the use of recursion:
+
+\begin{Snippet}
+  def factorial(n):
+      if n == 0:
+          return 1
+      else:
+          return n * factorial(n - 1)
+\end{Snippet}
+
+Since no variable assignment appears in the code, we can evaluate, say,
+the expression \texttt{factorial(5)} by substituting the references
+to function at given points with their values at that point:
+
+\begin{Snippet}
+  >>> factorial(5)
+  === 5 * factorial(4)
+  === 5 * 4 * factorial(3)
+  ...
+  === 5 * 4 * 3 * 2 * 1 * 1
+  === 120
+\end{Snippet}
+
+\subsection{Historical perspective -- data structures}
+
+The advantage of functional programs is that they tend to be more
+modular and reusable than their imperative counterparts. From the
+point of view of software engineering, they allow only a single way
+of passing information, namely -- either by providing it as arguments to
+functions, or collecting it from functions' results. The lack of
+assignment doesn't allow to pass information through global variables,
+for instance, which results in cleaner systems that are easier
+to maintain. Also, if programs are written with pure functions,
+the order of their evaluation doesn't matter (due to the
+Church-Rosser theorem\cite{Harrison1997} \cite{FelleisenFlatt2006}),
+which makes it easier to perform evaluations in parallel on different
+machines or CPU cores\cite{Backus1977} \cite{Dybvig1987}.
+
+However, this simplicity comes with a price. The users of
+imperative languages can tailor their programs to make the best
+use of the hardware that's going to be used to run it. Moreover,
+there is a considerable collection of solutions readily available
+for imperative programming languages, created under the assumption
+that \emph{programs = algorithms + data structures}\cite{Wirth1976},
+\cite{CLRS}. 
+
+The designers of programming languages quickly realized, that
+the \emph{programs = algorithms + data structures} paradigm
+imposes an enormous cognitive strain on programmers. If they
+wish to use the advantages of a few particular data structures,
+they usually need to write code that blends some catalogued data
+structures together.
+
+One attempt to solve this problem was to separate data structure
+implementations from their interfaces. This idea was embodied
+in the \emph{Standard Template Library} of the C++ programming
+language, which provided a few different data structures that
+could be used with a fixed set of generic functions\cite{Stroustrup1997}
+\cite{Stepanov1986}.
+
+It was also at the core of the SQL family of languages, which
+actually were designed as a unified interface to a plenitude
+of various data structures.
+
+Another idea was to provide a few basic, most commonly used
+data structures in the core language. Those typical data structures
+usually are: an ordered sequence of elements of arbitrary length
+(lists), an ordered sequence of elements of fixed length (tuples),
+a mapping between some key values and corresponding target values
+(dictionaries, usually implemented using hash tables), and
+unordered set of elements of arbitrary size (sets).
+
+The latter approach has been employed by many popular programming
+languages, such as Perl, Python, PHP, Ruby or JavaScript. Although
+the performance of their versatile built-in data structures
+is usually worse than in the case of tailored solutions, it
+is often sufficiently good for practical applications, and the greater
+conceptual simplicity of the source code makes its development
+and maintenance easier.
+
+An extreme version of this approach was proposed in 1958 by John McCarthy,
+who designed the LISP programming language\cite{McCarthy1960}. LISP
+used one data structure to represent collections, namely -- singly
+linked lists. They turned out to be expressive enough to embrace
+not only sets and multisets, but also dictionaries (as lists of key-value
+pairs).
+
+Since its inception, singly linked lists became a predominant data structure
+in functional programming\cite{Bagwell2002}, which -- in conjunction
+with the technique of garbage collection (also pioneered by McCarthy)
+allowed to develop programs devoid of state mutation.
+
+Unfortunately, singly linked lists have some undesired properties
+that disqualify them in a number of applications. For example,
+the access time to a random element is linear (as opposed to
+constant, as it is the case for arrays), similarly to calculating
+the length of a list. Furthermore, modern CPUs are optimized
+to process data that is organized in vectors, and the non-locality
+of link reference operation may contribute to an increased number
+of cache misses, left alone the doubled memory consumption
+caused by the need to store additional pointer along with each
+element of the list.
+
+For a long time, those deficiencies prevented functional programming
+from becoming widespread. Even the programming languages that were
+advertised as functional usually incorporated arrays in the repertoire
+of their primitive data structures, and specified their order
+of evaluation\cite{R5RS} (or provided some sophisticated means
+to do so\cite{Wadler1995}) in order to be able to use them
+in a predictive way.
+
+In 2002, Phil Bagwell proposed a data structure called VList,
+which merged the functionality of linked lists with vectors.
+The interface to the data structure remained unchanged compared
+to McCarthy's version, so the new data structure could easily
+replace linked lists in both compiled and interpreted code\cite{Bagwell2002}.
+
+For exactly the same reason, it didn't provide the improvement
+one could hope for -- functions that allocate resources in run time,
+without any help from static analysis, must remain ignorant to the
+way in which those allocated resources are used.
+
+\section{Formulation}
+
+Let's consider the following program -- the variant of Quick-sort,
+written in the Haskell programming language:
+
+\begin{Snippet}
+1 qsort [] = []
+2 qsort (p:xs) = (qsort below) ++ [p] ++ (qsort above)
+3     where
+4         below = filter (< p) xs
+5         above = filter (>= p) xs
+\end{Snippet}
+
+The central idea of the algorithm is expressed in the line 2:
+that the resulting sequence consists of the (sorted) elements
+smaller than pivot, followed by pivot, and then followed by the
+(sorted) elements greater than pivot.
+
+Let's contrast it with the imperative version from \cite{CLRS}:
+
+\begin{codebox}
+\Procname{$\proc{Quicksort}(A,p,r)$}
+\li \If $p < r$
+\li     \Then
+           $q \gets \proc{Partition}(A,p,r)$
+\li        $\proc{Quicksort}(A,p,q-1)$
+\li        $\proc{Quicksort}(A,q+1,r)$
+        \End
+\end{codebox}
+
+where $\proc{Partition}$ is defined as
+
+\begin{codebox}
+\Procname{$\proc{Partition}(A,p,r)$}
+\li $x \gets A[r]$
+\li $i \gets p-1$
+\li \For $j \gets p$ \To $r-1$
+\li     \Do \If $A[j] \le x$
+\li             \Then $i \gets i+1$
+\li                  exchange $A[i] \leftrightarrow A[j]$
+\End \End
+\li exchange $A[i+1] \leftrightarrow A[r]$
+\li \Return i + 1   
+\end{codebox}
+
+These definitions come with a remark, that ``to sort an entire array $A$,
+the initial call is $\proc{Quicksort}(A,1,length[A])$''.
+
+There are a few things to note here. First, that the imperative definition
+is much more difficult to follow, because array indexing adds another
+layer of indirection. Also, the imperative version is less composable,
+because it modifies its argument $A$, so if the old array ought to be
+used in some other part of the program, the programmer has to remember
+to make a copy.
+
+On the other hand, the \texttt{qsort} function defined in Haskell
+can only superficially be called \emph{quick}: both the \texttt{filter}
+function and the list concatenation operator \texttt{++} allocate new
+storage, and the time complexity of the \texttt{++} operator is proportional
+to the length of its leftmost argument. Furthermore, each use of
+the \texttt{filter} function traverses the input list once, so
+it may be traversed twice per each invocation of \texttt{qsort}.
+By contrast, the $\proc{Partition}$ function traverses
+the input array only once.
+
+There is also a significant difference in the content of the data
+structures at the intermediate steps of computation: the \texttt{above}
+and \texttt{below} lists will contain elements in the order in which
+they appear in the \texttt{xs} list, while the result of $\proc{Partition}$
+is generally difficult to determine. 
+
+The reason why this question doesn't matter too much is that the elements
+eventually end up sorted, no matter what both the initial and intermediate
+arrangements of elements are.
+
+Clearly, there is a big difference between the functional \texttt{qsort}
+and the imperative $\proc{Quicksort}$, because the latter is based
+on a clever idea of $\proc{Partition}$ing an array (in place).
+
+However, we can perceive the Haskell program as a sort of a section through
+its imperative counterpart. In particular, it should be possible
+to mechanically transform certain classes of functional programs so
+that they would use arrays instead of lists, and reuse previously allocated
+storage instead of allocating new one. This is what this work is going to
+be about.
+
+\section{Structure of this work}
+
+This work is organized in two parts -- the purpose of the first part
+is to introduce the basic notions that are going to be needed
+to formulate the problem in a bit more rigorous terms. In particular,
+chapter 2 describes the source programming language that we wish to use
+for expressing our programs, and chapter 3 proposes a simple register
+machine model and its instruction set, which is the target of our
+transformations/optimizations. In chapter 4, we present a general
+transformation which allows to execute programs in our source
+language on the target machine (this transformation is traditionally
+called \textit{compilation}). Chapter 5 gives an overview of a
+system for reasoning about programs expressed in (a subset of)
+the source language.
+
+In the second part, we develop some techniques for optimizing
+various classes of programs. In chapter 6, we develop a technique
+that allows to transform various basic functions that operate on
+lists into procedures operating on arrays. Chapter 7 deals mostly
+with Quicksort, and although it fails to deliver working solutions,
+we hope that it at least arrives at some valuable conclusions.
+
+In every chapter, there is a lot of code illustrating the ideas
+being presented or elaborated. The code is the integral part
+of the work, and we encourage the reader to actually read it
+(rather than skip it). Except for the chapter 5, all the code was
+actually tested (and therefore we suspect that programs in chapter 5
+almost certainly contain some bugs).
+
+All the code is written using the Scheme programming language.
+We've heard that some people find it difficult to comprehend
+the programs written in that language because of the multitude
+of parentheses that can be used in some more complex expressions.
+In our hope that the hesitant readers overcome their repulsion,
+we assure that the code is indented in a way that was supposed
+to facilitate the comprehension of the programs, rather than
+confuse the readers.
+
+We admit that -- although the syntax of the Lisp family of
+programming languages turned out to be perfect for our task
+(and we challenge the readers to prove us wrong) --
+the typesetting of Lisp programs clearly requires some
+elaboration.
+
+On the other hand, we have to say that the habit of building
+and testing programs bit by bit gave us a lot of confidence
+in the quality of our work. In particular, this approach allowed
+us to find out that there are some problems with the functional
+implementation of Quicksort proposed in \cite{Hudak1986} (cf.
+appendix \ref{HudakQuicksort})
+
+\section{Related work}
+
+Our work partially overlaps on some efforts that were undertaken
+in order to reduce the burden of garbage collection to compile
+time (\cite{Baker1990}, \cite{Chase1987}, \cite{GopinathHennessy1989},
+\cite{Hederman1988}, \cite{Hudak1986}) and of interfacing arrays
+in functional languages (\cite{Baker1991}, \cite{Wadler1995}).
+
+The idea of using a theorem-proving system for optimizing programs
+appears in \cite{FutamuraKonishiGluck2001}, and is -- to an extent
+-- explored in \cite{BurstallDarlington1977}.
+
+An alternative approach to the problem of tackling data structures
+in functional program -- not by transforming the programs, but
+by designing the data structures in such a way that makes them
+more suitable in immutable setup -- can be found in \cite{Okasaki1996}
+and \cite{Bagwell2002} (among others).
+
+\section{Acknowledgements}
+
+First and foremost, I would like to thank my family and my girlfriend
+for supporting my crazy decision of returning to the University to
+fill the gap in my education. In particular, I appreciate the patience
+of Dorota, that I have been permanently overusing.
+
+I am grateful to my dearest friend Ścisław Dercz vel Michał Stańczyk,
+for countless stimulating discussions and his bright critical remarks
+regarding this work (sorry for giving out your secret identity, you
+uneducated ragtag). 
+
+I am also grateful to the teachers that I've had a pleasure to work
+with during this rather lengthy period of my education, in particular
+to Wiesław Pawłowski for sharing his fascination in logic, Janusz
+Dybizbański and Maciej Dziemiańczuk for all the fun I've had during
+their classes, Tomasz Dzido for giving me an opportunity to spread
+the ideas of functional programming in the realm of combinatorics,
+Paweł Żyliński for appreciating the succinctness of the solutions
+that I have been bringing to him, Grzegorz Madejski for encouraging
+me to work on \cite{Godek2016}, that in a way was a prelude to this
+work, and of course my supervisor Christoph Schwarzweller who provided
+me with the perfect conditions for working on this thesis. I also
+deeply appreciate the wise advice of Andrzej Szepietowski who
+pointed me to him.
+
+I owe a lot to Paulina Śliwka and Alicja Zurita-Kwapińska from
+the Dean's office, who showed me so much kindness and support, and
+Andrzej Borzyszkowski, whom I have been troubling constantly.
+
+The design of the virtual machine from chapter 3 was directly
+inspired by the course in the Theory of Computation that I took
+during the year that I've spent studying Philosophy at the University
+of Warsaw. I would like to thank Marcin Mostowski for being a demanding
+teacher, and for assigning me the task of preparing a note about the
+RAM machines \cite{Godek2012} (although the note is in Polish,
+I was nicely surprised to have discovered that the same concept
+was described in a popular book about philosophy \cite{Dennett2013}).
+
+I also wanted to thank Sophia Gold for sacrificing
+her time to read this work, and for pointing me to a new whole realm
+of papers on the related subjects (I have to admit that I am extremely
+impressed with you as a person), and Carl Eastlund for helping me out
+with inductive proofs, and for co-authoring ``The Little Prover''.
+
+To be honest, I could go on and on with the list of people to whom
+I am grateful, and whose existence contributed to this work. I don't
+think that I would manage to bring this work into existence without
+the three years that I've spent at the University of Gdańsk studying
+Philosophy, being influenced by a lot of great teachers, including
+Stanisław Judycki, Martyna Koszkało, Rafał Urbaniak, Andrzej Leszczyński,
+Aleksandra Pawliszyn, Iwona Krupecka, Wojciech Bęben and many others,
+as well as my inspiring and enthusiastic friends and colleagues.
+It was the best time in my life.
+
+I may have failed to appreciate the value of the time that I've spent
+studying Automatic Control and Robotics at the Technical University
+of Gdańsk, where -- despite the ``industrial'' hostility of that place
+-- I have also met a couple of soul mates, notably Piotr Suchomski,
+who taught me to love Mathematics.
+
+I should also mention Radek Potyraj and Andrzej Macuk, who created
+the right conditions at the Fellows company, which allowed me to try
+to continue the studies. I am grateful to Michał Janke for dragging
+me to their company, and I regret that in the end the things didn't
+turn out as good as they could have. I appreciate the attitudes of
+my colleagues at work, who have been showing interest in this work
+and my opinion and expertise, making me feel as someone important.
+
+My apologies to everyone who might have felt that his or her name
+is missing here. For purely ecological reasons, I'm unable to do
+the justice to all of you here. (This also includes a lot of people
+that I never had any opportunity to meet in person, and whose work
+I had to admire from the distance, be it spatial or temporal.)
+
+%% However, these deviations do not disturb \emph{The Principle of
+%%   Compositionality} from holding almost universally in the language.
+%% The Principle of Compositionality claims, that
+%% \begin{quote}
+%%   The meaning of a complex expression is determined by
+%%   its structure and the meanings of its constituents\cite{Szabó2013}.
+%% \end{quote}
+%% The implications of The Principle of Compositionality are twofold.
+%% First, it clarifies that there are only two things to know in order
+%% to be able to use a language, namely the meanings of its simplest terms
+%% and the allowed ways of composing those terms.
+%% Second, it teaches
+
+% programowanie funkcyjne jako uniwersalny zestaw konwencji
+% modelowany na podstawie języka naturalnego
+
+% przezroczystość odniesieniowa i zasada kompozycjonalności
+
+% redundancja
+
+% ``cognitive simplicity''
+
+% quicksort w Haskellu oraz wariant z Cormena
+
+% problem z quicksortem w Haskellu -- pamięć tablicowa
+
+% ogólniejszy problem z Haskellem: trudność wnioskowania o złożoności
+% czasowej i pamięciowej
+
+% pojęcia podstawowe: podstawieniowy model obliczeń, aplikatywny
+% i normalny porządek ewaluacji
+

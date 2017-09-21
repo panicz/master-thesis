@@ -1,0 +1,840 @@
+\chapter{Trying to make Quicksort quick again}
+
+\section{Motivating examples revisited}
+
+In the first chapter we have shown an implementation
+of \texttt{qsort} function in Haskell, contrasted with an imperative
+implementation of Tony Hoare's $\proc{Quicksort}$ algorithm. We claimed
+that although the Haskell program possessed certain properties that
+are desired from the point of view of systematic program construction,
+the ease of its analysis and compositionality came with a cost,
+namely -- an increased consumption of computational resources.
+
+We further claimed that this cost can be reduced -- even to zero
+-- in the presence of appropriate reasoning and transformation tools,
+and then went on to presenting some tools that could be helpful
+in achieving that goal.
+
+In this chapter, we are going to attempt to apply these tools
+to our original problem. In order to do so, however, we first need to
+translate the programs to languages that are more susceptible
+to meta-programming than Haskell or pseudo-code.
+
+\subsection{Implementing \texttt{qsort} in Scheme}
+
+The implementation of \texttt{qsort} in Scheme using \texttt{quasiquote}
+and \texttt{match} is very similar to the Haskell version:
+
+\begin{Snippet}
+  (define (qsort list)
+    (match list
+      (() '())
+      ((head . tail)
+       (let ((below (filter (is _ < head) tail))
+             (above (filter (is _ >= head) tail)))
+         `(,@(qsort above) ,head ,@(qsort below))))))
+\end{Snippet}
+
+The \texttt{match} macro could be expanded to an \texttt{if}
+form, and the \texttt{quasiquote} macro is just a call to
+the \texttt{append} function in disguise:
+
+\begin{Snippet}
+  (define (qsort list)
+    (if (null? list)
+      '()
+    ;else
+      (let ((head (car list))
+            (tail (cdr list)))
+        (let ((below (filter (lambda (x) (< x head)) tail))
+              (above (filter (lambda (x) (>= x head)) tail)))
+          (append (qsort above)
+                  (cons head (qsort below)))))))
+\end{Snippet}
+
+\subsection{The desired outcome}
+
+For the purpose of reference, we may write a counterpart
+of the $\proc{Quicksort}$ and $\proc{Partition}$ programs
+from chapter 1 in our assembly language:
+
+\begin{multicols}{2}
+\begin{Snippet}
+Quicksort:
+   (if first >= last goto end:)
+   (push return)
+   (return <- partitioned:)
+   (goto Partition:)
+partitioned:
+   (push last)
+   (push result)
+   (return <- left-sorted:)
+   (last <- result - 1)
+   (goto Quicksort:)
+left-sorted:
+   (pop result)
+   (pop last)
+   (pop return)
+   (first <- result + 1)
+   (goto Quicksort:)
+end:
+   (goto return)
+\end{Snippet}
+
+\columnbreak
+
+\begin{Snippet}
+Partition:
+   (pivot <- [last])
+   (trail <- first - 1)
+   (front <- first)
+loop:
+   (if front >= last goto done:)
+   (item <- [front])
+   (if item > pivot goto next:)
+   (trail <- trail + 1)
+   (swap <- [trail])
+   ([front] <- swap)
+   ([trail] <- item)
+next:
+   (front <- front + 1)
+   (goto loop:)
+done:
+   (result <- trail + 1)
+   (item <- [result])
+   (swap <- [last])
+   ([result] <- swap)
+   ([last] <- item)
+   (goto return)
+\end{Snippet}
+\end{multicols}
+
+It is no surprise that the assembly corresponding to $\proc{Quicksort}$
+and $\proc{Partition}$ is even more difficult to follow that the original
+versions of those functions. For this reason, they won't be very useful
+to us. Instead, we prefer to obtain an imperative version of Quicksort
+in Scheme.
+
+\subsection{Hoare partitioning}
+
+The $\proc{Partition}$ function presented in chapter 1 is itself rather
+difficult to follow, as it operates on array indices. We can achieve
+a significant improvement in readability by merely elaborating the
+interfaces to data types: rather than raw indices, we would prefer
+to use \textit{array slices} (which resemble the concept of
+\textit{memory views} from chapter 6).
+
+For the remainder of this section we shall assume, that there is
+a \texttt{slice} function available, which takes an array, base
+index and size, and creates an array view that shares the storage
+with an original array.
+
+For example, if \texttt{A} is defined as a Scheme array \texttt{\#(1 2 3 4 5)},
+then \texttt{(slice A 1 3)} shall create an array \texttt{\#(2 3 4)} (let's
+call it \texttt{B}).
+
+If we modify this new array, the corresponding elements of the old array
+will get modified as well. For example, \texttt{(array-set!\,\,B\,\,'X 0)}
+will cause \texttt{B} to become \texttt{\#(X 3 4)}, but will also cause
+\texttt{A} to become \texttt{\#(1 X 3 4 5)}\footnote{
+  It may seem surprising that \texttt{array-set!} takes the value as
+  its second argument, and array index as its last argument -- contrary
+  to \texttt{vector-set!} known from Scheme. The code that we're showing
+  here has been written and tested with Guile Scheme, which supports
+  its own API for shared and multidimensional arrays \cite{GuileReference}.
+}.
+
+Given such operation, one can express the Hoare partitioning scheme
+in the following way:
+
+\begin{Snippet}
+(define (Hoare-partition! array)
+  (let ((size (array-length array))
+	(pivot (array-ref array 0)))
+  
+    (define (parts! back front)
+      (cond ((is front >= size)
+	     (let ((middle (- back 1)))
+	       (swap! 0 middle array)
+	       (values (slice array 0 middle)
+                       (slice array (+ middle 1)
+                                    (- front back)))))
+
+	    ((is (array-ref array front) < pivot)
+	     (swap! back front array)
+	     (parts! (+ back 1) (+ front 1)))
+
+	    (else
+	     (parts! back (+ front 1)))))
+
+    (parts! 1 1)))
+\end{Snippet}
+
+Even though it is imperative, we believe that operating on array slices
+rather than raw array indices provide a significant improvement over the
+variant presented in chapter 1.
+
+Given this definition, the Scheme version of the $\proc{Quicksort}$
+procedure can be defined as:
+
+\begin{Snippet}
+(define (quicksort! array)
+  (unless (is (array-length array) <= 1)
+    (let ((smaller greater (Hoare-partition! array)))
+      (quicksort! smaller)
+      (quicksort! greater)))
+  array)
+\end{Snippet}
+
+Again, it is slightly easier to follow, because the reader doesn't need
+to be concerned with array indexing, although in this case the difference
+is rather negligible.
+
+The problem is, though, that -- contrary to the \texttt{qsort} variants
+in Scheme and Haskell -- the form of the \texttt{quicksort!}\,\,function
+doesn't make the idea behind quicksort immediately apparent. In particular,
+its correctness is based on the fact that the pivot is swapped with the
+``middle'' element before returning slices of the array.
+
+\subsection{Functional variant of Hoare partitioning}
+
+The Hoare partition scheme can actually be expressed in a purely functional
+fashion. We generalize it a bit to take an arbitrary condition for
+partitioning the array:
+
+\begin{Snippet}
+(define (Hoare-partition condition list)
+  
+  (define (parts list back front)
+    (cond ((is front >= (length list))
+	   (split-at list back))
+	
+	  ((condition (list-ref list front))
+           (parts (swap back front list) (+ back 1)
+                                         (+ front 1)))
+	  (else
+	   (parts list back (+ front 1)))))
+  
+  (parts list 0 0))
+\end{Snippet}
+
+where \texttt{swap} is defined as
+
+\begin{Snippet}
+(define (swap i-th #;with j-th #;in list)
+  (alter i-th (alter j-th list (list-ref list i-th))
+	 (list-ref list j-th)))
+\end{Snippet}
+
+and the helper \texttt{alter} function -- as \label{alter}
+
+\begin{Snippet}
+(define (alter n-th #;in list #;with replacement)
+  (let (((head . tail) list))
+    (if (= n-th 0)
+        `(,replacement . ,tail)
+    ;else
+        `(,head . ,(alter (- n-th 1) tail
+                          replacement)))))
+\end{Snippet}
+
+The \texttt{(split-at list n)} function defined in \cite{SRFI-1} returns
+two values -- the first one contains the first \texttt{n} elements of
+the original \texttt{list}, and the second one -- the remaining elements.
+
+This allows us to express \texttt{qsort} in the following way:
+
+\begin{Snippet}
+(define (quicksort list)
+  (match list
+    (()
+     '())
+    ((head . tail)
+     (let* ((below above (Hoare-partition (is _ < head) tail)))
+       `(,@(quicksort below) ,head ,@(quicksort above))))))
+\end{Snippet}
+
+\section{Transformation}
+
+The question which now arises is: under what circumstances are we allowed
+to rewrite \texttt{quicksort} to something like \texttt{quicksort!},
+and \texttt{Hoare\--partition} to something like \texttt{Hoare-partition!}?
+
+Before attempting to answer it, let's note that there are a few bothering
+things about the definitions of \texttt{quicksort!}\,\,and
+\texttt{Hoare\--partition!}. As we noted before, the base case of
+\texttt{Hoare\--partition!}\,\,contains the \texttt{(swap!\,\,0 middle array)}
+instruction, which silently inserts a pivoting element of the array
+in between the slices.
+
+Furthermore, the algorithm works, because the slices returned by
+\texttt{Hoare\--partition!} belong to a continuous region.
+
+Lastly, the \texttt{quicksort!} procedure doesn't give a clue
+about the structure of the result, contrary to its functional
+counterpart.
+
+This observation prompts us with the following hint: perhaps we could use the
+structural information contained in the \texttt{`(,@(quicksort below)
+  ,head ,@(quicksort above))} expression to automatically generate a call to
+\texttt{swap!}?
+
+\subsection{Some properties of \texttt{quicksort}}
+
+\subsubsection{\texttt{quicksort} is order-invariant}
+
+We know that this is acceptable, because \texttt{quicksort} returns
+the same result for any permutation of its input\footnote{This is
+  only true if the \texttt{<} relation is a total order with regard to the
+  elements contained in the input list.}, and therefore we can permute
+the elements of the \texttt{below} and \texttt{above} lists anyway we
+like (as long as this happens before their elements are sorted).
+
+We could express this property in the following way:
+
+\begin{Snippet}
+(define ((ordering? function) elements)
+  (if (list? elements)
+    (let ((result (function elements)))
+      (every (lambda (permutation)
+               (equal? (function permutation) result))
+             (permutations elements)))))
+
+(assure (ordering? quicksort))
+\end{Snippet}
+
+where \texttt{permutations} can be defined using a helper function
+\texttt{insertions}:
+
+\begin{Snippet}
+(define (insertions x l)
+  (match l
+    (()
+     `((,x)))
+    ((head . tail)
+     `((,x ,head . ,tail) . ,(map (lambda (y)
+				    `(,head . ,y))
+				  (insertions x tail))))))
+\end{Snippet}
+\begin{Snippet}
+(e.g. (insertions 'a '(x y z))
+   ===> ((a x y z) (x a y z) (x y a z) (x y z a)))
+\end{Snippet}
+\begin{Snippet}
+(define (permutations l)
+  (match l
+    (()
+     '(()))
+    ((head . tail)
+     (append-map (lambda (sub)
+		   (insertions head sub))
+		 (permutations tail)))))
+\end{Snippet}
+\begin{Snippet}
+(e.g. (permutations '(a b c))
+   ===> ((a b c) (b a c) (b c a) (a c b) (c a b) (c b a)))
+\end{Snippet}
+
+The problem with the \texttt{ordering?} lemma is that it does not
+conform to the specification of \texttt{<rule>} from chapter 5, and hence
+we wouldn't know how to use it. It can be expressed in a more operational form:
+
+\begin{Snippet}
+(define ((ordering*? function) elements probe)
+  (if (and (list? elements)
+           (is probe member (permutations elements)))
+      (equal? (function probe) (function elements))))
+
+(assure (ordering*? quicksort))
+\end{Snippet}
+
+\subsubsection{\texttt{quicksort} preserves elements}
+
+\begin{Snippet}
+(define ((preserves-elements? function) input probe)
+  (equal? (not (is probe member input))
+          (not (is probe member (function input)))))
+
+(assure (preserves-elements? quicksort))
+\end{Snippet}
+
+The arguments to \texttt{equal?} in \texttt{preserves-elements?}
+are negated, because \texttt{member} returns some truth-ish value
+(more precisely, it returns the suffix of its second argument,
+whose \texttt{car} is \texttt{equal?} to its first argument~\cite{R5RS}),
+rather than just \texttt{\#true}.
+
+\subsubsection{\texttt{quicksort} preserves length}
+
+\begin{Snippet}
+(define ((preserves-length? function) input)
+  (equal? (length input) (length (function input))))
+
+(assure (preserves-length? quicksort))
+\end{Snippet}
+
+\subsection{Analysis continued}
+
+Consider the expanded version of the main expression from \texttt{quicksort}:
+
+\begin{Snippet}
+(append (quicksort below) (cons head (quicksort above)))
+\end{Snippet}
+
+We assume that \texttt{(quicksort above)} is already in the right place.
+Therefore, we're concerned with the expression of the form
+
+\begin{Snippet}
+(append (quicksort below) (cons head DO-NOT-MOVE!))
+\end{Snippet}
+
+We can deduce that there is a free cell available to the left of
+the \texttt{below} list (actually, it is occupied by the value of
+\texttt{head}, but we don't care about it too much, since we already
+managed to store this value in a local variable) and that -- in order
+to make the result of the \texttt{append} function fit the allocated
+storage -- we need to move its last element into that free cell
+and then place the value of \texttt{head} in the previous position
+of the last element.
+
+In other words, given the appropriate circumstances, we wish
+to transform the above invocation of \texttt{append} into something like
+
+\begin{Snippet}
+(begin
+  (when (is (length below) > 0)
+    (array-set! list (last below) 0)
+    (array-set! list head (length below)))
+  (quicksort! below)
+  (quicksort! above)
+  list)
+\end{Snippet}
+
+Now the most difficult part is to specify what exactly is to be meant
+by \textit{appropriate circumstances}. As in the case of
+\texttt{array-passing} convention, our transformation
+needs to decide that the result of the function can overwrite its argument
+(which in general depends on the way the argument is used by the caller).
+
+Assuming that this is indeed the case, we shall transform all the functions
+that are used by \texttt{quicksort} -- most notably,
+the \texttt{Hoare\--partition} function.
+
+Again, we need to determine when it is OK, for example, to replace
+references to \texttt{swap} with references to \texttt{swap!}, and
+this can actually be quite tricky.
+
+For example, suppose that we had a mutating variant of \texttt{alter}
+
+\begin{Snippet}
+(define (alter! n-th #;in array #;with replacement)
+  (array-set! array replacement n-th)
+  array)
+\end{Snippet}
+
+and wanted to use it to mechanically derive the definition of \texttt{swap!}
+from the definition of \texttt{swap}. The naive substitution would yield
+the following definition:
+
+\begin{Snippet}
+(define (swap!/incorrect i-th #;with j-th #;in array)
+  (alter! i-th (alter! j-th array (array-ref array i-th))
+	 (array-ref array j-th)))
+\end{Snippet}
+
+The problem is that, since the order of evaluation of arguments
+is unspecified, it is possible (and likely) that
+\texttt{(alter!\,\,j-th array (array-ref array i-th))} will
+be evaluated before \texttt{(array-ref array j-th)}, causing the
+latter to refer to a modified object. As a result, instead of swapping,
+we will only duplicate the \texttt{j-th} element. (Even worse,
+if the evaluation order is reversed, the problem may remain unnoticed!)
+
+Of course, the straightforward solution to this problem is to extract
+all references to arrays before any mutation takes place:
+
+\begin{Snippet}
+(define (swap! i-th #;with j-th #;in array)
+  (let ((array/i (array-ref array i-th))
+        (array/j (array-ref array j-th)))
+    (alter! i-th (alter! j-th array array/i) array/j)))
+\end{Snippet}
+
+The derivation of the mutating counterpart of \texttt{Hoare-partition}
+seems extremely straightforward: we simply need to replace a reference
+to \texttt{list-ref} with a reference to \texttt{array-ref}, a reference
+to \texttt{swap} with reference to \texttt{swap!}, a reference to
+\texttt{length} with a reference to \texttt{array-length}, and
+a reference to \texttt{split-at} with a reference to \texttt{split-at!}
+that could be defined in the following way:
+
+\begin{Snippet}
+(define (split-at! array index)
+  (values (slice array 0 index)
+          (slice array index (- (array-length array)
+                                index))))
+\end{Snippet}
+
+The result of the transformation looks as follows:
+
+\begin{Snippet}
+(define (Hoare-Partition! condition array)
+  
+  (define (Parts! array back front)
+    (cond ((is front >= (array-length array))
+	   (split-at! array back))
+	
+	  ((condition (array-ref array front))
+           (Parts! (swap! back front array) (+ back 1)
+                                            (+ front 1)))
+	  (else
+	   (Parts! array back (+ front 1)))))
+  
+  (Parts! array 0 0))  
+\end{Snippet}
+
+Note that since the \texttt{array} argument in the \texttt{Parts!}
+helper function doesn't change between the calls, and could therefore be
+removed.
+
+A much more puzzling question is: what makes this transformation so
+straightforward? Unfortunately, we have no answer for it. The fact is,
+that the code for \texttt{Hoare-partition} was itself derived from
+the code that was based on array slices.
+
+The transformation of \texttt{quicksort} is somewhat more complex.
+It exploits certain properties regarding the memory layout of allocated
+objects that we talked about earlier. We hope that the intended meaning
+can be inferred from the names of predicates that are used to express
+these properties.
+
+\begin{Snippet}
+(define (Quicksort! array)
+  (if (is (array-length array) = 0)
+      array
+  ;else
+      (let ((head (array-ref array 0))
+            (tail (slice array 1 (- (array-length array) 1))))
+        (let* ((below above (Hoare-Partition! (is _ < head) tail)))
+          (assert (and (continuous-region? below above)
+                       (same-region? (rejoin below above) tail))
+                       (same-region? array (Quicksort! array)))
+            (when (is (array-length below) > 0)
+              (array-set! array (array-last below) 0)
+              (set! below (slice array 0 (array-length below)))
+              (array-set! array head (array-length below)))
+            (Quicksort! below)
+            (Quicksort! above)
+            array))))
+\end{Snippet}
+
+where \texttt{array-last} is defined as
+
+\begin{Snippet}
+(define (array-last array)
+  (array-ref array (- (array-length array) 1)))
+\end{Snippet}
+
+The resemblance between \texttt{Quicksort!}\,\,and \texttt{quicksort}
+is not easy to see, and therefore the transformation is far from obvious.
+
+\subsubsection{The \texttt{()} pattern}
+
+The pattern \texttt{()} is mapped to the condition
+\texttt{(is (array-length array) = 0)}. Moreover, the result \texttt{'()}
+is mapped to the value of \texttt{array}. Unlike in the case of the functional
+variant, we cannot simply return any empty array (in particular, we cannot
+allocate a new empty array, or return some generic object that would represent
+an empty array).
+
+Our optimization would need to figure out that the result we're returning
+is actually contained in one of its arguments. Deciding which argument
+it is supposed to be is not an easy task in general (on the other hand, in
+this particular case we don't have many candidates to consider).
+
+\subsubsection{The \texttt{(head .\,\,tail)} pattern}
+
+The clause \texttt{((head .\,\,tail) <template>)} is mapped to the
+\begin{Snippet}
+  (let ((head (array-ref array 0))
+        (tail (slice array 1 (- (array-length array) 1))))
+    <template*>)
+\end{Snippet}
+
+expression, and
+
+\begin{Snippet}
+  (let* ((below above (Hoare-partition (is _ < head) tail)))
+    <body>)
+\end{Snippet}
+
+is simply mapped to
+
+\begin{Snippet}
+  (let* ((below above (Hoare-Partition! (is _ < head) tail)))
+    <body*>)
+\end{Snippet}
+
+Of course, in the case of actual code, all the \texttt{let},
+\texttt{let*}, \texttt{match} and \texttt{is} forms would be expanded
+to \texttt{if}, \texttt{lambda} and \texttt{call-with-value} forms
+prior to the transformation.
+
+\subsubsection{Turning concatenation into imperative operations}
+
+The transformation of \texttt{`(,@(quicksort below) ,head ,@(quicksort above))}
+has already been discussed to some extent, although the actual code differs
+slightly from what we have anticipated -- its particular form is the
+following sequence of operations:
+
+\begin{Snippet}
+  (when (is (array-length below) > 0)
+    (array-set! array (array-last below) 0)
+    (set! below (slice array 0 (array-length below)))
+    (array-set! array head (array-length below)))
+  (Quicksort! below)
+  (Quicksort! above)
+  array
+\end{Snippet}
+
+This sequence of operations definitely begs for some explanation.
+In order to do that, let's now explicitly state the principle that
+implicitly drove the research throughout the previous chapter:
+
+\begin{quote}
+  if an output of a function is a collection containing no more
+  elements than are contained in the collections of some of the
+  function's arguments, and there are no references to the values
+  of those arguments at any later execution point of that program
+  (later than the invocation of that function, that is), then
+  it should be advised that the collections are laid out in
+  a continuous region of memory. When this is done, then
+  the storage occupied by input arguments can be re-used to store
+  the value of the output.
+\end{quote}
+
+From there, it follows that
+
+\begin{quote}
+  if an output of a function is a permutation of some of its inputs,
+  and there are no references to that input at any later execution point
+  of that program, then the permutation can be performed in place
+  on that input (instead of performing a copy).
+\end{quote}
+
+This conclusion is insufficient to perform the considered transformation.
+We need to resort to another principle:
+
+\begin{quote}
+  if the result of a function is obtained by appending some items
+  to a collection whose order of elements is irrelevant from the
+  point of view of the rest of the computation (that is, at the time
+  of appending the collection can be treated as a set rather than
+  sequence), and there is a sufficient amount of unused storage
+  in front of the collection being appended to, then the computation
+  can proceed by copying elements from the back of the sequence
+  before the front of the sequence, and moving the appended items into
+  the freed place.
+\end{quote}
+
+The formulation of this principle may not be satisfactory: it can
+often be the case that there is some free space at the back of
+the collection being appended to, and there is no need to
+move the elements from the back before the front of the collection.
+
+Apparently, this isn't the case in our example: we know that
+the \texttt{above} array (or -- more precisely -- the array
+obtained from \texttt{(quicksort above)}) is already in the right
+place, and -- at the moment of transformation -- we're unable to
+tell whether there is any free space following that array.
+
+There is yet another problem with the treatment of the \texttt{append}
+function: the \texttt{below} array that is being appended to
+doesn't appear directly, but it is passed into \texttt{quicksort}.
+
+However, the resulting code needs to perform the concatenation
+\textit{before} the \texttt{Quicksort!} is called, and not after
+it is called.
+
+We could therefore formulate the following principle:
+
+\begin{quote}
+  if an array is a result of a function that produces
+  a \textit{deterministic permutation} of its argument,
+  and this array is the first argument to \texttt{append},
+  then the optimized counterpart of the expression can
+  perform concatenation prior to execution of the
+  optimized version of the function.
+\end{quote}
+
+Intuitively, the validity of this principle stems from the requirement
+that the function must be a deterministic permutation, which means
+that when it is passed any permutation of a collection of elements,
+then the order of elements in its result will always be the same.
+
+Now this principle may seem very particular, as if it were
+cut out especially to tackle our problem, and we admit that this was
+indeed the case. It would of course be much better if we had a more
+general principle from which the above one would follow.
+
+To sum up, in order to transform \texttt{(append (quicksort below)
+  (cons head (quicksort above))} like we want to, we must show that:
+\begin{enumerate}
+  
+\item \label{quicksort-result-in-value} the value of the whole
+  expression can replace the input argument,
+  i.e. \texttt{list}, because
+  \texttt{(equal?\,\,(length list) (length (quicksort list)))};
+  
+\item \label{quicksort-final-layout} the value of \texttt{above}
+  and/or \texttt{(quicksort above)} already occupies the desired
+  position in memory;
+  
+\item \label{quicksort-free-storage} there is enough unused storage
+  before \texttt{below} to perform the concatenation by swapping
+  elements from the back to the front and inserting the elements
+  that are not in their final position (i.e. \texttt{head}) at the back;
+  
+\item \label{quicksort-irrelevant-order} from the point of view
+  of the rest of the computation, \texttt{before} can be treated
+  as a set, i.e. the order of the elements contained in it is irrelevant;
+
+\item \label{quicksort-deterministic-permutation }\texttt{quicksort}
+  is a deterministic permutation.
+
+\end{enumerate}
+
+As we have shown in chapter 6, the requirement \ref{quicksort-result-in-value}
+can only be decided upon the usage of the function in the rest of the program
+(however, we could always make a copy prior to the call to a function,
+assuring that the in-place optimization can be done).
+
+\section{Conclusions and future work}
+
+We believe that we have identified the conditions that are needed
+to transform the piece of functional code into its imperative counterpart
+that avoids generating garbage.
+
+We admit that these conditions are very particular, and that it would
+be more desirable to have a more general set of optimizations that would
+be able to handle the case of quicksort along with other cases.
+
+Also, we've found that it is rather difficult to translate these
+rules into a working Scheme code, so unlike in previous chapters,
+we give no working Scheme code for carrying out the transformation.
+Doing so would probably require the development of some framework
+for expressing general optimization/transformation rules. We hope
+this to be done in the future.
+
+While this work focused particularly on sorting, we hope it didn't
+loose its broader goal, which is to allow to take the burden of
+data structure selection off from programmers.
+
+Certainly, at this stage there's still a lot to be done. We admit
+that the methodology developed in this work, i.e. writing both
+functional and imperative solutions and then figuring out
+the transformation from the former to the latter, isn't particularly
+effective. We believe however, that over time some more swift
+methods for optimizing programs will be developed. Furthermore,
+this effort needs only be done by people who specialize in such
+optimization, allowing the majority of language users to express
+their programs in a way that is just convenient, without having
+to worry too much about their performance.
+
+We also believe that the approach to program optimization presented
+in this work may prove itself much more scalable than the more
+conventional approach, where programmers achieve speed-ups by
+modifying their original programs, because the same optimization
+could be used by more than just a one program.
+
+Of course, when it comes to optimization, it is reasonable to focus
+on the most common cases first. For this reason, we suggest that it might be
+a good idea to extend our transformation to handle matrix operations
+(where a matrix is to be represented as a list of lists of equal
+length).
+
+Moreover, we believe that the development of a formal system for
+reasoning about the time and space complexity of functions would
+be an important step towards making an automatic system for optimizing
+programs.
+
+Another idea to pursue is to have the compiler deduce the entropy
+of certain variables to minimize the amount of bits that are used
+to represent them. This way, it should sometimes be possible
+to have a couple of values stored in a single register.
+
+An even more radical idea is to feed the compiler with both
+the program and the description of the instruction set of
+the target processor, and have it automatically come up with
+a sequence of instructions that is (in some sense) isomorphic
+with the original program.
+
+Judging by the number of conferences, functional programming
+techniques have recently been getting more recognition in the industry.
+A likely reason for this state of affairs is that computer hardware
+is cheap and fast enough enough to run programs that were written
+with readability and maintainability in mind, rather than performance
+-- and indeed, the costs of programmers' mistakes and overlong
+development time often exceeds the costs of hardware by a few
+orders of magnitude. It is therefore reasonable to search for
+techniques of increasing software reliability, even if the price
+to pay is increased consumption of computing resources.
+
+However, the availability of cheap processing power should not be
+an excuse for wasting it. We believe (and hope that we managed to show
+this to some extent in this work) that functional programs may
+benefit from better maintainability without any performance loss
+whatsoever, and that the process of programming could be simplified
+further by moving the burden of dealing with data structures from
+the programmer to the compiler. As programming is becoming more
+and more popular an activity, but programmers are not necessarily
+becoming more competent, we suspect that this could even prevent
+some catastrophes in the future.
+
+%% This is a rather complex and subtle issue, but in a way similar to the
+%% optimization we did in the implementation of \texttt{pass-result}
+%% function in chapter 6.
+
+
+
+
+%% An obvious discrepancy between the functional and imperative solutions
+%% is that the latter defines the $\proc{Partition}$ procedure, whereas
+%% the former uses the \texttt{filter} function twice, with mutually
+%% exclusive conditions.
+
+%% Although traversing a list twice doesn't increase the asymptotic
+%% complexity of our algorithm, it does increase the constant factor.
+
+%% Therefore we could express the Scheme version of \texttt{qsort}
+%% in the following way:
+
+%% \begin{Snippet}
+%%   (define (qsort list)
+%%     (match list
+%%       (()
+%%        '())
+%%       ((head . tail)
+%%        (let (([below above] (partition (lambda (x)
+%%                                           (< x head))
+%%                                        tail)))
+%%          `(,@(qsort below) ,head ,@(qsort tail))))))
+%% \end{Snippet}
+
+%% where \texttt{partition} can be defined as
+
+%% \begin{Snippet}
+%%   (define (partition condition list)
+%%     (define (segregate input good bad)
+%%       (match input
+%%         (()
+%%          [good bad])
+%%         ((head . tail)
+%%          (if (condition head)
+%%            (segregate tail `(,head . ,good) bad)
+%%          ;else
+%%            (segregate tail good `(,head . ,bad))))))
+%%     (segregate list '() '()))
+%% \end{Snippet}
+
+

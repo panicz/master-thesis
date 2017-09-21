@@ -1,0 +1,73 @@
+\chapter{Hudak quicksort} \label{HudakQuicksort}
+
+Below we provide an implementation of Hudak's functional
+variant of quicksort that was originally given in \cite{Hudak1986},
+translated directly to Scheme. We failed to comprehend
+the idea of that implementation in the extent that would allow
+to fix it. As one can see, we provide our own indexing function
+called \texttt{ref}, expressed using the built-in \texttt{list-ref}
+function.
+
+\begin{Snippet}
+  (define (ref v n)
+    (list-ref v (- n 1)))
+\end{Snippet}
+
+We also provide our own implementation of the \texttt{update} function,
+whose semantics is explained in the paper.
+
+\begin{Snippet}
+  (define (update array index element)
+    (alter (- index 1) array element))
+\end{Snippet}
+
+where \texttt{alter} is defined as in chapter 7 (page \pageref{alter}).
+
+The rest of the program is a straightforward translation of Hudak's
+code.
+
+\begin{Snippet}
+  (define (quicksort v)
+    (qsort v 1 (length v)))
+\end{Snippet}
+\begin{Snippet}
+  (define (qsort v left right)
+    (if (is left >= right)
+	v
+	(scan-right v            (+ left 1) right
+                    (ref v left)       left right)))
+\end{Snippet}
+\begin{Snippet}
+  (define (scan-right v l r pivot left right)
+    (cond ((= l r)
+           (finish (update v l pivot)
+                   l left right))
+	  ((is (ref v r) >= pivot)
+	   (scan-right v l (- r 1) pivot left right))
+	  (else
+           (scan-left (update v l (ref v r))
+                      (+ l 1) r pivot left right))))
+\end{Snippet}
+\begin{Snippet}
+  (define (scan-left v l r pivot left right)
+    (cond ((= l r)
+	   (finish (update v l pivot)
+                   l left right))
+	  ((is (ref v l) <= pivot)
+	   (scan-left v (+ l 1) r pivot left right))
+	  (else 
+	   (scan-right (update v r (ref v l))
+                       l (- r 1) pivot left right))))
+\end{Snippet}
+\begin{Snippet}
+  (define (finish v mid left right)
+    (qsort (qsort v left (- mid 1)) (+ mid 1) right))
+\end{Snippet}
+
+One can easily see that the code fails to work as expected:
+
+\begin{Snippet}
+  (e.g.
+   (quicksort '(4 3 9 8 7 1 2 6 5))
+  ===> (4 4 4 4 7 7 7 7 9))
+\end{Snippet}

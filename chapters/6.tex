@@ -1,0 +1,1314 @@
+\chapter{List recursion and array-receiving style}
+
+By now, we should have a fairly detailed idea how the Scheme programs
+ought to be executed on register machines, and how to check whether
+our programs posses certain properties that are of interest to us.
+
+In this chapter we will try to formulate certain properties that
+should be useful for us if we wish to make our compiler use arrays
+in place of linked lists.
+
+\section{Some examples}
+
+Before we move on to the \texttt{qsort} example from the first chapter,
+we ought to note, that there are some much simpler examples of recursive
+functions whose behavior is sub-optimal.
+
+\subsection{The canonical implementation of \texttt{map}}
+
+Consider, for example, the following (Canonical) implementation of the
+\texttt{map} function, which was explained in the first chapter\footnote{
+  For the clarity of presentation, we are not going to employ the
+  \texttt{match} and \texttt{quasiquote} macros in our subject programs,
+  and only use them in the meta-programs.
+}:
+
+\begin{Snippet}
+  (define (map f l)
+    (if (null? l)
+      '()
+    ;else
+      (cons (f (car l)) (map f (cdr l)))))
+\end{Snippet}
+
+\subsection{A tail-recursive variant: \texttt{reverse-map}}
+
+Despite the fact that Scheme compilers perform the tail call optimization,
+the above definition of \texttt{map} is not tail-recursive, so the depth
+of the call stack is proportional to the length of the list.
+
+It could be rewritten to be tail-recursive in the following way:
+
+\begin{Snippet}
+  (define (reverse-map f l)
+  
+    (define (traverse in out)
+      (if (null? in)
+        out
+      ;else
+        (traverse (cdr in) (cons (f (car in)) out))))
+
+    (traverse l '()))
+\end{Snippet}
+
+The problem with this function is that that elements of the output list
+are in the reverse order -- for example, \texttt{(reverse-map square '(1 2 3))}
+would construct a list \texttt{(9 4 1)}. Of course, we could now define
+\texttt{map} by using \texttt{reverse-map} with the identity function
+
+\begin{Snippet}
+  (define (map f l)
+    (reverse-map f (reverse-map (lambda (x) x) l)))
+\end{Snippet}
+
+and while, defined this way, \texttt{map} would indeed use a constant amount
+of stack space, it would traverse the list twice, and needlessly generate
+\texttt{(length l)} cons-cells of garbage.
+
+\subsection{A destructive variant: \texttt{map!}}
+
+Another problem is that if the list passed to \texttt{map} isn't going to
+be used any more, the storage allocated for this list will be unavailable
+until the next cycle of garbage collection, and its reclaim will occupy
+some running time.
+
+This problem could be solved by the destructive version of \texttt{map}:
+
+\begin{Snippet}
+  (define (map! f l)
+    (define (iterate point)
+      (if (null? point)
+        l
+      ;else
+        (begin
+          (set-car! point (f (car point)))
+          (iterate (cdr point)))))
+    (iterate l))
+\end{Snippet}
+
+This variant is both tail-recursive and economical, but it only works
+if the aforementioned condition is satisfied, i.e. the original list
+isn't used anywhere else in the program.
+
+Still, it could be reasonable (under some circumstances) to have our
+compiler detect the conditions like this, and replace some references
+to \texttt{map} with references to \texttt{map!}.
+
+\section{Array passing}
+
+Lastly, we noted in the first chapter, that linked lists, although
+conceptually simple and pragmatically versatile, are not always the
+most fortunate structure to store the data, since the computer
+memories are typically organized as arrays.
+
+We therefore devise a systematic procedure for transforming some class
+of functions that operate on lists into functions operating on
+arrays (or directly on memory pointers).
+
+A function should receive an additional argument, \texttt{target},
+which should be used for storing the result. For example, the
+\texttt{map} function should become:
+
+\begin{Snippet}
+  (define (map-into target f l)
+  
+    (define (step target-index f l-index)
+      (if (beyond? l-index l)
+        target
+        (begin
+          (memory-set! target-index (f (memory-ref l-index)))
+          (step (next target-index) f (next l-index)))))
+        
+    (step (start target) f (start l)))
+\end{Snippet}
+
+The above code refers to some procedures that are a part of our interface
+to arrays, namely \texttt{beyond?}, \texttt{next}, \texttt{start},
+\texttt{memory-ref} and \texttt{memory-set!}.
+
+The \texttt{start} function returns a pointer to the first element of array,
+the \texttt{beyond?}\, predicate checks whether a given pointer points outside
+of an array, and \texttt{next} function returns a pointer of an element next
+to a given one. The \texttt{memory-ref} and \texttt{memory-set!} procedures
+return and modify the value of memory cell pointed to by a given pointer.
+
+For now, we are deliberately avoiding to provide any concrete implementation
+of this interface, so that we don't need to decide whether all the sizes of
+elements of an array are uniform, nor whether the addresses of subsequent
+elements should be ascending or descending.
+
+The questions that arise are:
+\begin{enumerate}
+\item Under what circumstances can we transform a recursive function
+  to the array-receiving style?
+\item How do we transform a recursive function to the array-receiving
+  style?
+\item How do we transform regular function calls into array-passing
+  function calls?
+\end{enumerate}
+
+We don't know the exact answers to these questions, but we shall
+propose an initial attempt of addressing them.
+
+\subsection{List recursion}
+
+Dubbing the term \emph{tail recursion}, we shall name the circumstances
+under which we can use arrays instead of lists, a \emph{list recursion}
+(to be distinguished from \emph{tree recursion} or \emph{free recursion}).
+
+The first approximation of a list recursion is that it is a function \texttt{f}
+whose tail expression is either:
+\begin{itemize}
+\item a list literal (or a call to a function which produces a list literal), or
+\item an argument to \texttt{f} which is known to be bound to a list
+  (either by virtue of some assertion, or proven within the \texttt{f}'s
+  calling context), or
+\item a recursive call to \texttt{f}, or
+\item an expression of the form \texttt{(cons x (f .\,\,args))}, where
+  neither \texttt{x} nor \texttt{args} contains a recursive call to \texttt{f}.
+\end{itemize}
+
+The last condition could actually be loosened a bit: the second argument
+to \texttt{cons} could itself be a \texttt{cons}, and so on, until we
+make the recursive call, or it could be a call to a function which evaluates
+to a list or to an expression of the form \texttt{(cons x y)}, where
+\texttt{y} is an argument of that function, and it is bound to the value
+of the recursive call \texttt{(f .\,\,args)}. However important, these
+nuances obscure the point that we are trying to make, so we shall ignore
+them for the moment.
+
+In order to put what we have just said more formally, we need to specify
+what we mean by tail expressions of a given expression. When our
+expression has a form \texttt{(if <test> <then> <else>)}, then its
+tail expressions are the tail expressions of \texttt{<then>} and
+tail expressions of \texttt{<else>}. Otherwise, if it has the form
+\texttt{((lambda <args> <body>) . <values>)}, then the tail expressions
+are the tail expressions of \texttt{<body>} with \texttt{<values>}
+substituted for \texttt{<args>} throughout. Otherwise, the tail expressions
+are a singleton containing only the expression itself:
+
+\begin{Snippet}
+  (define (tail-expressions expression)
+    (match expression
+      (('if <test> <then> <else>)
+       `(,@(tail-expressions <then>) ,@(tail-expressions <else>)))
+      ((('lambda <args> <body>) . <values>)
+       (tail-expressions (substitute <args> <values> <body>)))
+      (_
+       `(,expression))))
+\end{Snippet}
+
+To check whether a function is list-recursive, we need to know
+its name, its body and a list of its arguments. The name is needed,
+because the function is potentially recursive, and if so, it refers
+to itself by that very name. The arguments are needed, because it is
+possible that a function returns some of its arguments in its tail
+position. The body is needed for the obvious reasons.
+
+\begin{Snippet}
+  (define (list-recursion? name+args+body)
+    (let* (((name args body) name+args+body)
+           (tail-expressions (tail-expressions body)))
+       (define (list-recursive? tail)
+         (match tail
+           (('quote literal)
+            (list? literal))
+
+           (('cons item (function . arguments))
+            (and (not (calling? item name))
+                 (equal? function name)
+                 (every (lambda (arg)
+                          (not (calling? arg name)))
+                        arguments)))
+
+           ((('lambda <args> <body>) . <values>)
+            (list-recursive? (substitute <args> <values> <body>)))
+
+           ((function . arguments)
+            (and (every (lambda (arg)
+                          (not (calling? arg name)))
+                        arguments)
+                 (equal? name function)))
+
+           (_
+            (is tail member args))))
+                        
+    (every list-recursive? tail-expressions)))
+\end{Snippet}
+
+where the \texttt{calling?}\,\,predicate is defined as:
+
+\begin{Snippet}
+  (define (calling? expression name)
+    (match expression
+      (('quote _)
+       #false)
+
+      ((('lambda <args> <body>) . <values>)
+       (calling? (substitute <args> <values> <body>) name))
+
+      ((function . args)
+       (or (equal? function name)
+           (calling? function name)
+	   (any (lambda (arg)
+		  (calling? arg name))
+	        args)))
+      (_
+       #false)))
+\end{Snippet}
+
+While these notions clearly need an elaboration (for example,
+the fact that we use \texttt{substitute} with recursive call
+allows to construct forms that would never terminate), they should
+be sufficient to indicate some conditions that permit us to
+convert a list recursive function to the array-receiving style.
+
+\subsection{Transformation to array-receiving style}
+
+The \texttt{array-receiving} function takes a triple \texttt{(name args body)}
+and returns a definition of an array-receiving version of that function.
+
+For example (as explained earlier),
+
+\begin{Snippet}
+   (array-receiving '(map (f l)
+		          (if (null? l)
+			    '()
+			    (cons (f (car l))
+			 	  (map f (cdr l))))))
+\end{Snippet}
+
+should return something like the following definition:
+
+\begin{Snippet}
+  (define (map-into target f l)
+\end{Snippet}
+\begin{Snippet}  
+    (define (step target-index f l-index)
+      (if (beyond? l-index l)
+        target
+        (begin
+          (memory-set! target-index (f (memory-ref l-index)))
+          (step (next target-index) f (next l-index)))))
+\end{Snippet}
+\begin{Snippet}
+    (step (start target) f (start l)))
+\end{Snippet}
+
+Clearly, a list recursive function is transformed into a helper
+function called \texttt{step}, which is invoked from the body
+of the array-receiving function (with the \texttt{-into} suffix
+with its name and an additional parameter called \texttt{target}).
+
+The parameters of the \texttt{step} helper function are just like
+the parameters of the array-receiving function, except that some
+of its arguments which originally referred to lists, now become
+pointers to arrays (which is signified with tagging them with
+the \texttt{-index} suffix).
+
+Note that in general it could be the case that some arguments
+that referred to lists in the original function would still refer to lists,
+rather than arrays: we may want to only capture the result to the array,
+and we may not necessarily wish to have to convert every input list
+to an array prior to the function call. We could therefore assure the
+fine-grained control by explicitly passing the arguments that should
+be interpreted as arrays in the array-receiving version of a function.
+
+However, for the purpose of this work, we assume that all the arguments
+that can be inferred to refer to lists shall be treated as arrays.
+
+We can infer that an argument refers to a list, if it is tested to
+be \texttt{null?}, or if either its \texttt{car} or \texttt{cdr}
+is applied to it. (Again, this heuristics may not be particularly
+comprehensive, but it should be sufficient for the purpose of this work.)
+
+\begin{Snippet}
+  (define (list-arguments expression)
+\end{Snippet}
+\begin{Snippet}
+    (define (possibly argument)
+      (cond ((symbol? argument)
+	     `(,argument))
+	    ((pair? argument)
+	     (list-arguments argument))
+	    (else
+	     '())))
+\end{Snippet}
+\begin{Snippet}
+    (match expression
+      ((function . args)
+       (if (is function member '(cdr null?))
+	   (apply union (map possibly args))
+	   (apply union (map list-arguments args))))
+      (_
+       '())))
+\end{Snippet}
+
+As in the case of the \texttt{list-recursion?}\,\,test, the function
+that converts a function to the \texttt{array-receiving} style should
+take a triple containing name, arguments and body:
+
+\begin{Snippet}
+  (define (array-receiving name+args+body)
+    (let* (((name args body) name+args+body)
+           (list-args (intersection args (list-arguments body))))
+\end{Snippet}
+
+The conversion needs to consider a few cases: branching instruction
+should convert both branches recursively; a \texttt{cons} instruction
+should be converted to a write of its first argument into
+the \texttt{target-index}, followed by the conversion of the second
+argument. A \texttt{null?}\,\, test should be converted to a
+call to \texttt{beyond?}. A recursive call in original function should
+be transformed into a recursive call to \texttt{step}, where all
+the applications of \texttt{cdr} to any of \texttt{list-args}
+should be replaced with calls to \texttt{next}, and applications
+of \texttt{car} -- to calls to \texttt{memory-ref}. In other words,
+we need at least two helper functions -- \texttt{convert}, which
+converts the whole expressions, and \texttt{convert-argument}
+to convert arguments to function applications:
+
+\begin{Snippet}
+      (define (convert-argument argument)
+        (match argument
+	  (('car expression)
+	   (if (is expression member list-args)
+	       `(memory-ref ,(symbol-append expression '-index))
+           ;else
+                argument))
+\end{Snippet}
+\begin{Snippet}
+	  (('cdr expression)
+	   (if (is expression member list-args)
+	       `(next ,(symbol-append expression '-index))
+           ;else
+                argument))
+\end{Snippet}
+\begin{Snippet}
+	  ((function . args)
+	   `(,function . ,(map convert-argument args)))
+	  (_
+	   argument)))
+\end{Snippet}
+
+\begin{Snippet}
+      (define (convert expression next-target)
+        (match expression
+	  (('if <test> <then> <else>)
+	   `(if ,(convert <test> next-target)
+	        ,(convert <then> next-target)
+	        ,(convert <else> next-target)))
+\end{Snippet}
+\begin{Snippet}
+	  (('cons first rest)
+	   `(begin
+	      (memory-set! target-index ,(convert-argument first))
+	      ,(convert rest `(next ,next-target))))
+\end{Snippet}
+\begin{Snippet}
+	  (('null? x)
+	   (if (is x member list-args)
+	       `(beyond? ,(symbol-append x '-index) ,x)
+           ;else
+               expression))
+\end{Snippet}
+\begin{Snippet}
+	  (('quote ())
+	   'target)
+\end{Snippet}
+\begin{Snippet}
+	  ((function . arguments)
+	   (if (eq? function name)
+	      `(step ,next-target
+		     . ,(map convert-argument arguments))
+           ;else
+              `(,function . ,(map convert-argument arguments))))
+\end{Snippet}
+\begin{Snippet}
+          (_
+	   (if (is expression member list-arguments)
+	       (symbol-append expression '-index)
+           ;else
+	       expression))))
+\end{Snippet}
+
+The \texttt{array-receiving} function needs to construct a \texttt{define}
+form containing a definition of the \texttt{step} function and an invocation
+of that function with initial arguments:
+
+\begin{Snippet}
+    `(define (,(symbol-append name '-into) target . ,args)
+       (define (step target-index
+                     . ,(map (lambda (arg)
+			       (if (is arg member list-args)
+			           (symbol-append arg '-index)
+                               ;else
+                                   arg))
+			      args))
+	 ,(convert body 'target-index))
+\end{Snippet}
+\begin{Snippet}
+       (step (start target)
+             . ,(map (lambda (arg)
+		       (if (is arg member list-args)
+		          `(start ,arg)
+                       ;else
+			  arg))
+	             args)))))
+       ;; the body of `array-receiving ends here
+\end{Snippet}
+
+Of course, there are means which allow to avoid accidental name
+clashes with the names such as \texttt{step} or \texttt{target},
+but for the time being we ignore this issue completely.
+
+While the \texttt{array-receiving} function may not be perfect,
+it is general enough to be able to transform some functions
+other than \texttt{map}. For example, one can easily check
+that the array-receiving version of the function \texttt{range}
+defined as
+
+\begin{Snippet}
+  (define (range lo hi)
+    (if (> lo hi)
+        '()
+    ;else
+        (cons lo (range (+ lo 1) hi))))
+\end{Snippet}
+
+is the following:
+
+\begin{Snippet}
+(define (range-into target lo hi)
+  (define (step target-index lo hi)
+    (if (>= lo hi)
+	target
+    ;else
+	(begin
+	  (memory-set! target-index lo)
+	  (step (next target-index) (+ lo 1) hi))))
+  (step (start target) lo hi))
+\end{Snippet}
+
+Likewise, the canonical implementation of the \texttt{filter}
+function (as explained in chapter 2)
+
+\begin{Snippet}
+(define (filter p l)
+  (if (null? l)
+      '()
+  ;else
+      (if (p (car l))
+	  (cons (car l) (filter p (cdr l)))
+      ;else
+          (filter p (cdr l)))))
+\end{Snippet}
+
+and its corresponding array-receiving version is
+
+\begin{Snippet}
+(define (filter-into target p l)
+  (define (step target-index p l-index)
+    (if (beyond? l-index l)
+      target
+    ;else
+      (if (p (memory-ref l-index))
+        (begin
+          (memory-set! target-index (memory-ref l-index))
+          (step (next target-index) p (next l-index)))
+      ;else
+        (step target-index p (next l-index)))))
+  (step (start target) p (start l)))
+\end{Snippet}
+
+\subsection{Memory management}
+
+The universality of Lisp based systems stems from the fact the
+\texttt{cons} operator, invoked from within functions, is responsible
+for memory allocation, and the responsibility for reclaiming
+the memory that is no longer in use belongs to the garbage
+collector.
+
+The array receiving style, however, transfers the burden of memory
+allocation from a callee to a caller. In order for this to be possible,
+the caller needs to know how much memory the called function is going
+to need, and allocate it prior to the call, or -- if it is able to
+prove that some sufficiently large area of memory won't be used in
+the rest of the program -- reuse some previously allocated area.
+
+While this problem can be hard to determine in general, there are
+clearly situations when it is relatively easy. For example,
+it should not be hard to prove the following lemmas
+(assuming totality of \texttt{f} and \texttt{p}):
+
+\begin{Snippet}
+  (define (map-length f l)
+    (if (and (list? l) (unary-function? f))
+      (equal? (length (map f l))
+              (length l))))
+
+  (assure map-length)
+\end{Snippet}
+\begin{Snippet}
+  (define (append-length a b)
+    (if (and (list? a) (list? b))
+      (equal? (length (append a b))
+              (+ (length a) (length b)))))
+
+  (assure append-length)
+\end{Snippet}
+\begin{Snippet}
+  (define (range-length lo hi)
+    (if (and (natural? lo) (natural? hi))
+      (equal? (length (range lo hi))
+              (max 0 (- hi lo)))))
+
+  (assure range-length)
+\end{Snippet}
+
+\begin{Snippet}
+  (define (filter-length p l)
+    (if (and (list? l) (unary-predicate? p))
+      (equal? (max (length l) (length (filter p l)))
+              (length l))))
+
+  (assure filter-length)
+\end{Snippet}
+
+These lemmas can be used to infer the amount of memory that needs to be
+allocated for a given function. Note that, depending on situation,
+this information doesn't necessarily need to be available prior to
+a function call: one can imagine that the \texttt{target} argument
+to an array-receiving function could be located at the end of the heap,
+and grow the array as needed.
+
+\subsubsection{Reusing memory}
+
+However, if we are able to infer the size of the output of a function
+prior to the call, we could potentially overwrite some object which 
+would no longer be needed for the computation. This in turn could decrease
+program's reliance on garbage collection, increasing overall
+performance.
+
+This observation, in turn, leaves us with the following question:
+how can we know the lifetimes of heap allocated objects? The intuitive
+answer is that these lifetimes span between the creation of an object,
+and the last point at which any of the variables referring to that
+object is used.
+
+One can imagine at least two counterexamples to this intuition, though.
+The first one is a function which might return some of its arguments.
+Consider the following procedure:
+
+\begin{Snippet}
+  (define (random-argument . arguments)
+    (list-ref arguments (random (length arguments))))
+\end{Snippet}
+
+Unless we make a function like this make a copy of its return value
+(which would likely be unreasonable, given the goal we set to ourselves),
+we cannot rely on the fact that any of its arguments is no longer used
+in the code following the call to that function, at least as long as
+the result of that procedure is used thereby.
+
+Of course, it might be tempting to ask, under which circumstances
+can we prove that a function does not return any data structure
+that is shared by any of its arguments, and this is indeed an interesting
+question. For the time being, we shall allow ourselves to leave it
+unanswered, though.
+
+\subsubsection{Shared objects}
+
+The second example is of a greater significance to us, because it
+has more to do with the goal that we set to ourselves in the first
+chapter. It might be the case (often a desirable one), that a list
+produced by some function should be a part of another list. In particular,
+if a function application (or its result) is the first argument to
+\texttt{append}, we would wish to arrange the computation just by placing
+the memory areas of its arguments side by side, avoiding any actual
+calls to \texttt{append} and memory copying whatsoever.
+
+It therefore seems that the question, how do we prove that an allocated
+object is no longer needed, is in general non-trivial, and instead of
+solving it for the general case, we need to focus on some particular
+cases that serve our goal.
+
+Let's consider a simple example of the aforementioned optimization
+of \texttt{append}:
+
+%% TODO: jak zoptymalizować funkcje ``take'' i ``drop''?
+%% jak określić, kiedy chcielibyśmy tworzyć kopie, a kiedy odniesienie
+%% do oryinału?
+%% kilka przykładów z appendem: tak, żeby czasem musieć przekopiować
+%% strukturę, a czasem nie,
+
+\begin{Snippet}
+  (define (numbers&squares amount)
+    (let* ((numbers (range 0 amount))
+           (squares (map square numbers)))
+      (append numbers squares)))
+\end{Snippet}
+
+We can infer from the \texttt{range-length} lemma, that the length of
+\texttt{numbers} is \texttt{amount}, and likewise -- from \texttt{map-length}
+-- that the length of \texttt{squares} is the length of \texttt{numbers}, i.e.
+\texttt{amount}. Finally, by \texttt{append-length} we could conclude that
+the amount of memory that has to be allocated for \texttt{numbers\&squares}
+is \texttt{(+ amount amount)}.
+
+We could therefore expect that -- if the \texttt{numbers\&squares} function
+isn't itself meant to be array-receiving, it could be transformed to the
+following form\label{numbers-and-squares-array}:
+
+\begin{Snippet}
+  (define (numbers&squares/array amount)
+    (let* ((memory (allocate (+ amount amount)))
+           (numbers (range-into (view memory 0 amount)
+                                0 amount))
+           (squares (map-into (view memory amount amount)
+                              square numbers)))
+        memory))
+\end{Snippet}
+  
+How can this transformation be performed? Speaking most generally,
+we need to transform it from the last expression to the first.
+We observe, that the tail expression in the original function
+is \texttt{(append numbers squares)}. Subsequently, we notice
+that \texttt{numbers} and \texttt{squares} are the results of
+functions that are list-recursive, and -- according to the argument
+presented earlier -- we are able to calculate their lengths
+and -- consequently -- the total amount of memory that needs to
+be allocated by the function.
+
+Because \texttt{append} prompts us to allocate a single block
+of memory to hold the results of both \texttt{range} and \texttt{map},
+we need to be able to access some \textit{fragments} of the allocated
+area. In order to do so, we can use what is traditionally called
+\textit{views} of memory, which -- in the system we're designing --
+can be created using the \texttt{view} function. As in the case of
+other functions relating to arrays, its implementation would depend
+on the particular representation of the meta-data for arrays.
+
+\subsection{Explicit allocation}
+
+In chapter 4, while designing our compiler, we perceived functions
+as black boxes, or abstraction barriers, that allowed us to treat
+each component of the program separately.
+
+It should be apparent that, since chapter 5, we have been looking
+at functions as \textit{white boxes}: we knew every detail about the
+functions we were dealing with, which allowed us to draw interesting
+conclusions about them.
+
+Here, we shall assume that our program consists of definitions only.
+Some of these definitions will be list-recursive, and thus shall
+be converted to array-receiving style. We also expect that there
+are some functions that call these array-receiving ones. They shall
+be responsible for allocating the memory needed by those array-receiving
+ones, and thus we shall call them ``array-passing'' (or \texttt{senders}).
+Lastly, we expect that there are functions that neither pass nor
+receive arrays. They shall remain intact.
+
+In order to simplify the reasoning about array-passing functions, we shall
+perform a complete $\beta$ reduction of their bodies, that is -- all
+substitutions of applications of the $\lambda$ expressions used in
+the bodies of their definitions. For example, if we expand the \texttt{let*}
+form of \texttt{numbers\&squares}, we obtain
+
+\begin{Snippet}
+  (define (numbers&squares amount)
+    ((lambda (numbers)
+       ((lambda (squares)
+          (append numbers squares))
+        (map square numbers)))
+     (range 0 amount)))
+\end{Snippet}
+
+which contains two applications of \texttt{lambda} forms. We can reduce
+this expression to
+
+\begin{Snippet}
+  (define (numbers&squares amount)
+    (append (range 0 amount) (map square (range 0 amount))))
+\end{Snippet}
+
+The reduction can be defined easily using our substitution function:
+
+\begin{Snippet}
+  (define (reduce expression)
+    (match expression
+      (('quote _)
+       expression)
+\end{Snippet}
+\begin{Snippet}
+      (('if <test> <then> <else>)
+       `(if ,(reduce <test>)
+            ,(reduce <then>)
+            ,(reduce <else>)))
+\end{Snippet}
+\begin{Snippet}
+      ((('lambda <args> <body>) . <values>)
+       (reduce (substitute <args> <values> <body>)))
+\end{Snippet}
+\begin{Snippet}
+      ((operator . operands)
+       `(,(reduce operator) . ,(map reduce operands)))
+\end{Snippet}
+\begin{Snippet}
+      (_
+       expression)))
+\end{Snippet}
+
+As we can see, a sequence of operations becomes a complex expression
+(in a way, this transformation is an opposite of the CPS conversion
+from chapter 4, which transformed complex expressions into step by step
+computations).
+
+It may seem displeasing that the \texttt{(range 0 amount)} application
+is repeated twice in the resulting expression. However, our transformation
+could eliminate repeating applications rather easily.
+
+In order to estimate the amount of memory needed for the result of an
+array-receiving function, we need to synthesize the knowledge from our
+lemmas. Of course, this is something that a system should do for us,
+but devising a method for synthesizing the \texttt{size}\footnote{
+  We use the name \texttt{size} in a sense that is different than
+  was characterized in chapter 5, where it meant the number of cons
+  cells used by an object. Here we desire the \texttt{size} to mean
+  the number of elements of a sequence. We hope that the reader
+  doesn't get confused with this ambiguity.
+}
+function for a particular set of array-receiving functions is beyond
+the scope of this work. Here we assume that we know how to compute
+the size for \texttt{map}, \texttt{filter} and \texttt{range}\label{size}:
+
+\begin{Snippet}
+(define (size expression)
+  (match expression
+    (('if <test> <then> <else>)
+     `(max ,(size <then>) ,(size <else>)))
+\end{Snippet}
+\begin{Snippet}
+    ((('lambda <args> <body>) . <values>)
+     (size (substitute <args> <values> <body>)))
+\end{Snippet}
+\begin{Snippet}
+    (('map f l)
+     (size l))
+\end{Snippet}
+\begin{Snippet}
+    (('range lo hi)
+     `(max 0 (- ,hi ,lo)))
+\end{Snippet}
+\begin{Snippet}
+    (('filter p l)
+     (size l))
+\end{Snippet}
+\begin{Snippet}
+    (('append x y)
+     `(+ ,(size x) ,(size y)))
+\end{Snippet}
+\begin{Snippet}
+    (('cons x y)
+     `(+ 1 ,(size y)))
+\end{Snippet}
+\begin{Snippet}
+    (_
+     `(length ,expression))))
+\end{Snippet}
+
+The transformation itself needs to split the definitions into the categories
+specified at the beginning of this section:
+
+\begin{Snippet}
+(define (array-passing-library definitions)
+  (let* (((('define (names . args) bodies) ...) definitions)
+	 (functions (zip names args bodies))
+	 (list-recursive non-list-recursive
+			 (partition list-recursion? functions))
+	 (senders intact
+		  (partition (lambda ((name args body))
+			       (let ((called (called-functions
+                                               `(lambda ,args
+                                                  ,body))))
+				 (any (lambda ((receiver _ _))
+                                           (is receiver member called))
+				      list-recursive)))
+			     non-list-recursive)))
+\end{Snippet}
+
+It will turn out, that we will want to check whether a given expression
+is an application of an array-receiving function, i.e. whether it belongs
+to the \texttt{list-recursive} set\footnote{For brevity, we've decided
+  to use the \texttt{and-let*} special form, inspired by the SRFI-2
+  document\cite{SRFI-2}, which was extended to support pattern matching.
+  %% Effectively, the function could have been written as \\
+  %% \texttt{
+  %%   (define (array-receiving? expression) \\
+  %%   \-\ (match expression \\
+  %%   \-\ \ \ ((function . \_) \\
+  %%   \-\ \ \ \ (any (lambda ((name \_ \_)) \\
+  %%   \-\ \ \ \ \ \ \ \ \ \ \ \ (eq? name function)) \\
+  %%   \-\ \ \ \ \ \ \ \ \ list-recursive)) \\
+  %%   \-\ \ \ (\_ \\
+  %%   \-\ \ \ \ \#false)))
+  %%   }
+}:
+
+\begin{Snippet}
+    (define (array-receiving? expression)
+      (and-let* (((function . _) expression))
+	(any (lambda ((name _ _))
+	       (eq? name function))
+	     list-recursive)))
+\end{Snippet}
+
+
+The array-passing versions of the functions should, prior to the call,
+estimate the amount of memory that can be used by the called functions,
+and allocate storage for the results. Then it should create the views
+for each invocation of array-receiving function, and pass them as
+suitable.
+
+\begin{Snippet}
+    (define (array-passing name+args+body)
+      (let* (((name args body) name+args+body)
+	     (expression (reduce body)))
+	`(define (,name . ,args)
+	   (let ((memory (allocate ,(size expression))))
+	     ,@(pass-result expression 0)
+	     memory))))
+\end{Snippet}
+
+The actual transformation of a function to the array-passing form
+is much harder, and -- as before -- we do not dare to claim that the
+transformation is correct or complete (other than that it works for
+some cases that were tested by us).
+
+For the time being, we assume that the main expression of our
+function is either a call to \texttt{append} (which is treated
+specially), whose both arguments are the calls to some array receiving
+functions, or the main expression itself is a call to some array-receiving
+function, which can further contain some calls to other array-receiving
+functions in its arguments.
+
+The case of \texttt{append} is rather straightforward\footnote{
+  To an extent: note that while the method that we chose allows
+  to treat functions whose exact output size can be inferred in
+  advance, it fails for the cases like \texttt{filter}, where
+  we can only know the maximum size of the output before actually
+  running the function.
+} -- we just need to pass the results of the nested calls to
+subsequent fragments of the allocated array:
+
+\begin{Snippet}
+    (define (pass-result expression base-address)
+      (match expression
+	(('append x y)
+	 `(,@(pass-result x base-address)
+           ,@(pass-result y `(+ ,base-address ,(size x)))))
+\end{Snippet}
+
+The invocation of an \texttt{array-receiving?}~function is much more
+complicated: we need to see whether the call itself contains any
+calls to array-receiving functions in the positions of
+\texttt{list-arguments}, and if so, we need to convert these calls
+as well.
+
+\begin{Snippet}
+	((function . arguments)
+	 (let* (((name args body) (find (lambda ((name _ _))
+					  (equal? name function))
+					list-recursive))
+	        (list-args (intersection (list-arguments body)
+                                        args))
+                (args/array-passing (filter array-receiving?
+                                            arguments)))
+\end{Snippet}
+
+It may not be immediately obvious, but the \texttt{list-args} is bound
+to a list of formal parameters of the function being called, which are
+known to be bound to lists, whereas \texttt{args/array-passing} refers
+to a list of actual values being passed to the given function. (This
+ambiguity in terminology seems to be a recurring topic in this chapter,
+actually, and we are sorry for not having done anything about it.)
+
+We assume that the elements in these lists correspond to each other
+-- that each of the \texttt{list-arguments} corresponds to the invocation
+of an array-passing function.
+
+We are also making a few other nasty assumption here, namely -- that
+the amount of memory used to store the return values of functions
+called from argument positions in some other function application
+does not exceed the amount of memory allocated for the main function's
+result, and that the function main can overwrite these results as it goes.
+
+Note, that although there are occasions where this actually is the case
+(such as the \texttt{map} function), it would not be difficult to construct
+a counterexample.
+
+Nevertheless, we do not allow two functions called from
+within the same level of nesting to overwrite the result of one another.
+In order to do so, we construct a sequence of ``base addresses'' of
+the allocated area of memory, where a function is allowed to write.
+
+We decided to have these base addresses grow from left to right:
+
+\begin{Snippet}
+	   (define (argument-bases initial-base parameters values)
+	     (match `(,parameters ,values)
+	       ((() ())
+		'())
+	       (((parameter . parameters) (value . values))
+		(or (and-let* (((is parameter member list-args))
+			       ((array-receiving? value))
+		               (base `(+ ,initial-base
+                                         ,(size value))))
+		      `(,initial-base . ,(argument-bases
+                                          base
+                                          parameters
+					  values)))
+		    (argument-bases initial-base
+                                    parameters
+                                    values)))))
+\end{Snippet}
+
+The sequence of base addresses constructed in this way can be used
+to generate the calls to the \texttt{view} function, which allows
+to access a particular fragment of the allocated memory:
+
+\begin{Snippet}
+	   (define (argument-views arguments bases)
+	     (match arguments
+	       (()
+		'())
+	       ((argument . arguments)
+		(if (array-receiving? argument)
+		    (let* (((base . bases) bases))
+		      `((view memory ,base ,(size argument))
+			. ,(argument-views arguments bases)))
+                ;else
+		    `(,argument . ,(argument-views
+                                      arguments bases))))))
+\end{Snippet}
+
+With these auxiliary definitions at hand, we can express the
+transformation to array passing style, which consists of two
+parts: the invocation of a given function should be preceded
+with invocations of all array-receiving arguments, and
+all the references to the results of those functions within
+the invocation of the main function should be replaced
+with references to the appropriate memory fragments
+(or \texttt{view}s):
+
+\begin{Snippet}
+           (let ((bases (argument-bases base-address
+                                         args
+                                         arguments))
+                 (pass-into (symbol-append function '-into)))
+	       `(,@(append-map pass-result
+                              args/array-passing
+                              bases)
+	         (,pass-into (view memory
+                                   ,base-address
+                                   ,(size expression))
+		     . ,(argument-views arguments bases))))))))
+        ;; the definition of ``pass-result'' ends here
+\end{Snippet}
+
+The main expression of the \texttt{array\--passing\--library}
+simply converts all the \texttt{list-recursive} definitions
+to the \texttt{array-receiving} form, and every caller of
+those functions -- to the \texttt{array-passing} form:
+
+\begin{Snippet}
+    `(,@(map (lambda ((name args body))
+	       `(define (,name . ,args) ,body))
+	     intact)
+      ,@(map array-receiving list-recursive)
+      ,@(map array-passing senders))))
+  ;; the definition of ``array-passing-library'' ends here
+\end{Snippet}
+
+\subsection{Examples revisited}
+
+We can check that the function actually works. The invocation
+of
+
+\begin{Snippet}
+(array-passing-library
+ '((define (map f l)
+     (if (null? l)
+	 '()
+	 (cons (f (car l))
+	       (map f (cdr l)))))
+\end{Snippet}
+\begin{Snippet}
+   (define (square x)
+     (* x x))
+\end{Snippet}
+\begin{Snippet}
+   (define (range lo hi)
+     (if (> lo hi)
+	 '()
+	 (cons lo (range (+ lo 1) hi))))
+\end{Snippet}
+\begin{Snippet}
+   (define (numbers&squares amount)
+      ((lambda (numbers)
+	 ((lambda (squares)
+	    (append numbers squares))
+	  (map square numbers)))
+       (range 0 amount)))))
+\end{Snippet}
+
+produces the following result:
+
+\begin{Snippet}
+((define (square x)
+   (* x x))
+\end{Snippet}
+\begin{Snippet} 
+ (define (map-into target f l)
+   (define (step target-index f l-index)
+     (if (beyond? l-index l)
+       target
+       (begin
+         (memory-set!
+           target-index
+           (f (memory-ref l-index)))
+         (step (next target-index) f (next l-index)))))
+   (step (start target) f (start l)))
+\end{Snippet}
+\begin{Snippet}
+ (define (range-into target lo hi)
+   (define (step target-index lo hi)
+     (if (> lo hi)
+       target
+       (begin
+         (memory-set! target-index lo)
+         (step (next target-index) (+ lo 1) hi))))
+   (step (start target) lo hi))
+\end{Snippet}
+\begin{Snippet}
+ (define (numbers&squares amount)
+   (let ((memory (allocate (+ (max 0 (- amount 0))
+			      (max 0 (- amount 0))))))
+     (range-into (view memory 0 (max 0 (- amount 0)))
+		 0 amount)
+     (range-into (view memory (+ 0 (max 0 (- amount 0)))
+		       (max 0 (- amount 0)))
+		 0 amount)
+     (map-into (view memory (+ 0 (max 0 (- amount 0)))
+		     (max 0 (- amount 0)))
+	       square
+	       (view memory (+ 0 (max 0 (- amount 0)))
+		     (max 0 (- amount 0))))
+     memory)))
+\end{Snippet}
+
+Note that the definition of \texttt{numbers\&squares} differs significantly
+from what we have anticipated earlier (cf. the definition of
+\texttt{numbers\&squares\-/array} on page \pageref{numbers-and-squares-array}).
+
+The most apparent difference is that the arguments to the \texttt{view} function
+are terribly cluttered. Assuming that \texttt{max} is non-negative, we could
+transform the above definition of \texttt{numbers\&squares} obtained from
+\texttt{array\--passing\--library} into:
+
+\begin{Snippet}
+(define (numbers&squares amount)
+  (let ((memory (allocate (+ amount amount))))
+    (range-into (view memory 0 amount) 0 amount)
+    (range-into (view memory amount amount) 0 amount)
+    (map-into (view memory amount amount)
+              square
+              (view memory amount amount))
+    memory))
+\end{Snippet}
+
+Now the most significant difference is that the \texttt{range-into} function
+is invoked twice, and that the results from \texttt{map-into} and
+\texttt{range-into} are never captured or passed explicitly.
+
+The first difference could be fixed by elaborating our method for obtaining
+\texttt{array-passing} versions of functions: after performing the
+\texttt{reduce} operation, we would need to extract common sub-expressions
+and perform some analysis to see whether some calls could be eliminated
+without any harm to the result of the computation.
+
+The fact that arguments aren't passed explicitly, but only cause side effects
+on the content of the \texttt{memory} area, is more bothersome in the case of
+functions such as \texttt{filter}, whose result size cannot be known \textit{a priori}.
+
+\section{Conclusion}
+
+We have presented a sketch of a method which allows us to transform
+functional programs that operate on lists with destructive programs
+that operate on arrays.
+
+Surely, the method is far from perfect, but it works for some simple
+examples.
+
+Some problems, like the synthesis of the \texttt{size} function (defined
+on page \pageref{size}) for a given set of array-receiving definitions,
+require some elaboration and seem to form whole research topics on their
+own.
+
+Another ones -- like the lifetime analysis of some specific heap areas
+-- reveal a lot of similarities to the topics that are already well examined
+in the Computer Science, and in the field of compiler construction
+in particular.
+
+
+%% \begin{Snippet}
+%%   (define (numbers first amount step)
+%%     (let* ((initial (range 0 amount))
+%%            (shifted (map (lambda (number)
+%%                            (+ number first))
+%%                          initial)))
+%%       (map (lambda (number) (* number step)) shifted)))
+%% \end{Snippet}
+
+%Typically, functions are treated are black-box abstractions hidden
+%behind a façade of calling conventions. This is roughly how we approached
+%this issue in chapter 4, where we constructed a compiler (the only exception
+%was that the compiler knew the names of registers used by particular
+%functions).
+
+
+
+%% Note that the recursive calls in the defitions of \texttt{qsort},
+%% and \texttt{filter} (and \texttt{append}) are not in the tail position,
+%% so we expect the stack to be growing with the size of input.
+
+%% Although we have seen an approach to the topic of representing
+%% Scheme lists as linked lists, we are not going to compile the
+%% above functions to machine code. Instead, we are going to assume
+%% here that lists are represented as a pair of memory pointers,
+%% marking the first and the last element.
+
+%% This way, such operations as computing the length of a given
+%% list, or accessing $n$-th element may have the cost $O(1)$.
+
+%% However, we may loose the possibility of structural sharing,
+%% and in some circumstances the cost of the \texttt{cons} operation
+%% may turn out to be big (we may need to reallocate the whole
+%% array). On the other hand, if we arrange our computations properly,
+%% it may turn out that the cost of \texttt{append} (which is normally
+%% proportional to the size of its leftmost argument) disappears
+%% completely.
+
+%% It is therefore important that we are able to identify the
+%% circumstances that allow us to use arrays instead of linked lists.
+
+%% \subsection{The desired outcome}
+
+%% For the purpose of reference, we may write a counterpart
+%% of the $\proc{Quicksort}$ and $\proc{Partition}$ programs
+%% from chapter 1 in our assembly language:
+
+%% \begin{Snippet}
+%% Quicksort:
+%%    (if first >= last goto sorted:)
+%%    (push return)
+%%    (return <- partitioned:)
+%%    (goto Partition:)
+%% partitioned:
+%%    (push last)
+%%    (push result)
+%%    (return <- left-sorted:)
+%%    (last <- result - 1)
+%%    (goto Quicksort:)
+%% left-sorted:
+%%    (pop result)
+%%    (pop last)
+%%    (pop return)
+%%    (first <- result + 1)
+%%    (goto Quicksort:)
+%% sorted:
+%%    (goto return)
+%% \end{Snippet}
+
+%% \begin{Snippet}
+%% Partition:
+%%    (pivot <- [last])
+%%    (trail <- first - 1)
+%%    (front <- first)
+%% partition-loop:
+%%    (if front >= last goto partition-loop-done:)
+%%    (item <- [front])
+%%    (if item > pivot goto partition-loop-continue:)
+%%    (trail <- trail + 1)
+%%    (swap <- [trail])
+%%    ([front] <- swap)
+%%    ([trail] <- item)
+%% partition-loop-continue:
+%%    (front <- front + 1)
+%%    (goto partition-loop:)
+%% partition-loop-done:
+%%    (result <- trail + 1)
+%%    (item <- [result])
+%%    (swap <- [last])
+%%    ([result] <- swap)
+%%    ([last] <- item)
+%%    (goto return)
+%% \end{Snippet}
+
+%% It is no surprise that the assembly corresponding to $\proc{Quicksort}$
+%% and $\proc{Partition}$ is even more difficult to follow that the original
+%% versions of those functions.
+
+
+
+
+
+%% An obvious discrepancy between the functional and imperative solutions
+%% is that the latter defines the $\proc{Partition}$ procedure, whereas
+%% the former uses the \texttt{filter} function twice, with mutually
+%% exclusive conditions.
+
+%% Although traversing a list twice doesn't increase the asymptotic
+%% complexity of our algorithm, it does increase the constant factor.
+
+%% Therefore we could express the Scheme version of \texttt{qsort}
+%% in the following way:
+
+%% \begin{Snippet}
+%%   (define (qsort list)
+%%     (match list
+%%       (()
+%%        '())
+%%       ((head . tail)
+%%        (let (([below above] (partition (lambda (x)
+%%                                           (< x head))
+%%                                        tail)))
+%%          `(,@(qsort below) ,head ,@(qsort tail))))))
+%% \end{Snippet}
+
+%% where \texttt{partition} can be defined as
+
+%% \begin{Snippet}
+%%   (define (partition condition list)
+%%     (define (segregate input good bad)
+%%       (match input
+%%         (()
+%%          [good bad])
+%%         ((head . tail)
+%%          (if (condition head)
+%%            (segregate tail `(,head . ,good) bad)
+%%          ;else
+%%            (segregate tail good `(,head . ,bad))))))
+%%     (segregate list '() '()))
+%% \end{Snippet}
+
+%% The new version of \texttt{qsort} does not 
+
+%% \begin{Snippet}
+%%   (lambda (condition list)
+%%     (equal? (partition condition list)
+%%             `[,(reverse (filter condition list))
+%%               ,(reverse (filter (lambda (x)
+%%                                   (not (condition x)))
+%%                                 list))]))
+%% \end{Snippet}

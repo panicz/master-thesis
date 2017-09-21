@@ -1,0 +1,650 @@
+\chapter{The computation model and the target language}
+
+In the previous chapter, we've expressed the subset of Scheme of our
+interest in this very subset. We used the representations of symbols,
+numbers and lists provided by the host Scheme implementation.
+
+However, this level of detail is insufficient for our purpose, because
+it does not reflect the capabilities and limitations of real machines.
+
+In particular, the typical computer architectures consist of registers
+and an array of memory cells that can hold integer numbers from some
+limited range.
+
+\section{Memory model and primitive data}
+
+\subsection{Memory allocation}
+
+This memory model can be expressed using the \emph{byte vector} data type
+that is present in the standard Scheme\footnote{
+  Admittedly, the choice of byte vectors as a base of our memory
+  does impose a restriction on the memory model, namely -- that
+  the size of a machine word must be a multiple of eight bits.
+  However, the reality shows that this the sort of restriction
+  that one can live with.
+  The readers who are worried with this attachment to the number
+  eight should be calmed that it has nothing to do with the merits
+  of this work, and the main reason for this choice is to make
+  the considerations contained here more realistic. The key point
+  is that the size of a single memory cell is limited (unlike,
+  for instance, the size of a number representable in Scheme, which
+  in particular cases could even span over thousands of clusters,
+  should that ever be needed).
+}. Note that at this stage
+our evaluator is no longer ``meta-circular'', as the subject language
+becomes different from the object language. The significance of this
+distinction is twofold. The strict order of evaluation and state
+mutations are the traits of the Scheme programming language that
+it shares with machine languages of popular architectures. However, we
+employ it here only to explain certain classes of optimizations
+that we wish to rely on while programming in the previously described
+subset of Scheme, as both strictness and mutability are hostile
+to comprehension and software compositionality.
+
+We can implement the allocator using a byte vector that will represent
+the random access memory of our machine, and a variable that would point
+to the free area of the memory. Since memory is just a large array of
+bytes, we would like to be able to impose a certain structure on it
+(pretty much like it is done using \texttt{struct}s in the C programming
+language or \texttt{record}s in Pascal). We can represent a structure
+using a list of \texttt{(<name> <type>)} pairs, for example, to say
+that a \texttt{cons} cell consists of two fields, \texttt{left} and
+\texttt{right}, and the size of each of those fields is the size of
+a machine word, we could write:
+
+\begin{Snippet}
+(define pair
+  '((left word)
+    (right word)))
+\end{Snippet}
+
+Knowing a \texttt{MACHINE-WORD-SIZE}\footnote{We assume here that the
+  size of a machine word is expressed in the number of bytes.}, we
+could check the size of a structure using the \texttt{size} function:
+
+\begin{Snippet}
+(define (size struct)
+  (match struct
+    (()
+     0)
+    ('word
+     MACHINE-WORD-SIZE)
+    (((name type) . rest)
+     (+ (size type) (size rest)))))
+\end{Snippet}
+
+This would be very uninteresting, though, if we were unable to
+refer to a specific field in a structure, i.e. to actually set
+or get a value at a certain address. To do so, we need to
+be able to retrieve an offset of a given field:
+
+\begin{Snippet}
+(define (offset field struct)
+  (let ((prefix (take-while (lambda ((name type))
+                              (not (eq? name field)))
+                            struct)))
+    (size prefix)))
+\end{Snippet}
+
+%% Ph. D. Thesis: A Survey of Program Transformation Techniques
+
+%% pytanie -- jak scalić ze sobą funkcje take-while oraz size
+%% żeby nie dokonywać niepotrzebnego kopiowania struktur?
+
+Of course, the procedures for getting and setting values of memory
+cells would need to operate in the context of some memory object:
+
+\begin{Snippet}
+(define memory (make-bytevector MEMORY-SIZE))
+\end{Snippet}
+
+\begin{Snippet}
+(define (set-struct-field-at! location struct field value)
+  (bytevector-set! (size (type field struct))
+                   (+ location (offset field struct))
+                   value))
+\end{Snippet}
+
+\begin{Snippet}
+(define (struct-field-at location struct field)
+  (bytevector-ref (size (type field struct))
+                  (+ location (offset field struct))))
+\end{Snippet}
+
+where \texttt{bytevector-ref} and \texttt{bytevector-set!} are defined
+in the core Scheme\footnote{This isn't quite true. In fact, the R$^6$RS
+  standard defines a family of functions that operate on typical sizes
+  of machine words (where a machine word is a multiple of 8 bits, and
+  ``multiple'' means some low power of two)\cite{R6RS}. These considerations
+  are not essential for the ideas presented here, so they were
+  simplified a bit.}.
+
+Note that although neither of the above procedures supports
+nested structures, it would be straightforward to add such support.
+
+Given these auxiliary procedures, we can now take a look at
+how the memory is allocated. We need to have a pointer that
+would indicate the area of memory that hasn't been allocated,
+and that would increase with each allocation, until it would
+reach the end of memory.
+
+\begin{Snippet}
+(define unallocated-memory 0)
+\end{Snippet}
+
+The definition of the allocation procedure -- i.e. the classical
+interpretation of the \texttt{cons} -- is rather straightforward
+-- it just allocates memory and initializes fields with given values:
+
+\begin{Snippet}
+(define (allocate-pair! left right)
+  (define (not-enough-memory?)
+    (is (+ unallocated-memory (size pair)) > MEMORY-SIZE))
+
+  (if (not-enough-memory?)
+    (collect-garbage! memory))
+  
+  (if #;still (not-enough-memory?)
+    (error 'not-enough-memory))
+
+  (let ((pair-location unallocated-memory))
+    (set-struct-field-at! pair-location pair 'left left)
+    (set-struct-field-at! pair-location pair 'right right)
+    (set! unallocated-memory (+ unallocated-memory (size pair)))
+    pair-location))
+\end{Snippet}
+
+It is apparent that the procedure checks whether the amount
+of available memory is sufficient, and it attempts to collect
+garbage otherwise. In the sequel, we shall ignore this issue
+and assume that the amount of memory is sufficient to perform
+any desired computation. After all, our goal is to constrain
+the memory usage at the earliest possible stage of program
+execution.
+
+\subsection{Primitive data types}
+
+As it was presented earlier, there's quite a few primitive
+data types available in Scheme, like cons-cells, numbers,
+symbols, booleans and procedures. On the other hand, a registry
+machine only allows us to hold a finite range of integer
+numbers in a single registry or a memory cell.
+
+A traditional approach taken by Lisp systems was
+to sacrifice a few bits of a registry or a memory cell
+to store the information regarding the type of the object
+held in that cell\footnote{For more details on this approach, see
+  for example \cite{Ghuloum2006} or \cite{Keep2013}.}.
+
+And while this ``context-free'' approach is inevitable
+in the most general case (that is, if we want our programs
+to process the full spectrum of s-expressions), it is often
+very wasteful, as there is a whole family of functions that
+operate on a narrower range of objects.
+
+Another approach, typically taken by languages such as C,
+is to leave the interpretation of the registry contents
+entirely up to the context. In such circumstances, it is
+the responsibility of the caller to know and satisfy
+the expectations and limitations of a called function,
+and there are specialized tools called ``type checkers''
+that ensure this.
+
+Eventually, everything boils down to manipulating
+the contents of the memory through registers. The contents
+of the registry can be interpreted either as the immediate
+data (in the case of objects such as booleans or
+small integer numbers or floating point numbers)
+or as addresses (pointers) of some objects that are
+too large to fit in a single memory cell.
+
+%% Therefore, unless we're able to infer the type of an object
+%% held in memory or register from some context, we are forced to
+%% encode (or tag) that type in the value of an integer number.
+
+%% It is customary to use a few lowest bits of the binary
+%% representation of a number to encode that type.
+
+%% Typically, a register can hold either an immediate value
+%% (such as a small integer) or an address of (pointer to)
+%% some intermediate object (such as a cons cell).
+
+%% Moreover, since the byte addresses are often aligned to
+%% machine word size (which typically is a power of two),
+%% the lowest bits of address are set to zero, which forms
+%% a natural tag for intermediate objects.
+
+\section{Machine language and model}
+
+Since our goal is to construct a program that takes a functional
+description of a transformation and produces a sequence of machine
+instructions that implement this functional description, it is
+essential to specify the set of available machine instructions.
+
+Of course, the instruction set does not need to be as detailed
+as it is for the real machines, because that would only obscure
+the bigger picture. Yet it has to be complex enough to be representative
+for actually existing machines.
+
+We are going to assume that, apart from an array of heap \texttt{memory}
+described in the previous section, the machine also has a separate
+storage area for the control \texttt{stack}, and that it also has an area of
+(read-only) \texttt{program} memory, with a special register called
+\texttt{next-instruction}, which points to the instruction to be
+executed in the next step of the computation.
+
+Furthermore, it has a set of general-purpose registers.
+
+\subsection{The instruction set}
+
+The following instructions are legal: 
+
+\begin{itemize}
+\item \texttt{[target-register] <- source-register} --- copy the contents
+  of the \texttt{source-register} to the memory cell whose address
+  is contained in the \texttt{target-register}\footnote{We make use of
+    the fact that Scheme does not distinguish between round and square
+    brackets, as long as they are paired properly.};
+
+\item \texttt{target-register <- [source-register]} --- copy the
+  contents of the memory cell pointed to by the \texttt{source-register}
+  to the \texttt{target\--register};
+
+\item \texttt{target-register <- register/value} --- copy the
+  value (either immediate or contained in the register on the right
+  hand side) to the \texttt{target-register};
+  
+\item \texttt{goto register/value} --- same as
+  \texttt{next-instruction <- re\-gi\-ster\-/value};
+
+\item \texttt{if left \textit{cmp} right goto address}
+  --- compare the contents/value of \texttt{left}
+  with \texttt{right} using \texttt{\textit{cmp}}
+  (where \texttt{\textit{cmp}} can either
+  be \texttt{<}, \texttt{<=}, \texttt{=}, \texttt{>=}, \texttt{>} or \texttt{<>},
+  meaning that the value of \texttt{left} is \textit{smaller than},
+  \textit{smaller than or equal to}, \textit{equal to},
+  \textit{greater than or equal to}, \textit{greater than} or
+  \textit{different from} the value of \texttt{right},
+  respectively), and if the condition is satisfied, jump to the
+  instruction at \texttt{address} in the program memory. Both
+  \texttt{left}, \texttt{right} and \texttt{address} can either
+  be a register or an immediate value (although there is little
+  sense in left and right being both immediate values at the same time);
+  
+\item \texttt{push register/value} --- increases the \texttt{stack-top}
+  by the size of a single machine word and copies the value
+  (either immediate or contained in a register) into the memory
+  cell pointed to by \texttt{stack-top};
+  
+\item \texttt{pop register} --- moves the value from the address pointed
+  to by \texttt{stack-top} and places it in \texttt{register}, and
+  decreases the value of \texttt{stack-top} by the size of a single
+  machine word;
+
+\item \texttt{register-c <- register/value-a \textit{op} register/value-b}
+  --- assigns \texttt{register-c} to contain the result of the binary operation
+  \texttt{\textit{op}} on values in \texttt{register/value-a}
+  and \texttt{register/value-b} (where \texttt{\textit{op}} can either
+  be \texttt{+}, \texttt{-}, \texttt{*}, \texttt{/}, \texttt{\%}, \texttt{\&\&},
+  \texttt{||}\footnote{We chose a double stroke (\texttt{||}) to signify
+    bit-wise or, because a single stroke is not a proper symbol in Scheme.
+    The double ampersand (\texttt{\&\&}) was chosen for consistency
+    of notation. Admittedly, those symbols can be confusing to people
+    who are accustomed to the C programming language, where these ``doubled''
+    symbols are used to denote logical disjunction and conjunction
+    rather than bit-wise operations, which are denoted using single
+    \texttt{|} and \texttt{\&}.}, \texttt{\^{}}, \texttt{<}\texttt{<}
+  or \texttt{>}\texttt{>}, meaning the \textit{sum}, the \textit{difference},
+  the \textit{product}, the \textit{quotient}, the \textit{remainder},
+  \textit{bit-wise and}, \textit{bit-wise or}, \textit{bit-wise xor},
+  \textit{arithmetic shift left} and \textit{arithmetic shift right},
+  respectively);
+
+\item \texttt{halt} -- causes the computation to halt.
+  
+\end{itemize}
+
+\subsection{A virtual machine}
+
+As before, our description can be stated more rigorously and concisely,
+and in a manner that is operationally valuable. Note that unlike in
+the previous chapter, we make an extensive use of the state mutation.
+Of course, rewriting the code to the functional form would be
+a straightforward task.
+
+The interpretation of the instructions is performed by the \texttt{execute}
+function, which translates them to the actual operations to be performed
+by our machine. For its own purposes, the function defines four helper
+functions: \texttt{next}, which advances the instruction pointer and
+continues the computation; \texttt{fetch-instruction}, which returns
+the next instruction to be executed; \texttt{goto}, which modifies
+the instruction pointer to a given value and continues the computation
+from there on; and \texttt{value}, which decides whether its argument
+is an immediate value or a register, and in the latter case it returns
+the value contained in the register.
+
+We use the Scheme symbols to represent registers
+
+\begin{Snippet}
+(define (register? register/value)
+  (symbol? register/value))
+\end{Snippet}
+
+\begin{Snippet}
+(define (execute program machine)
+\end{Snippet}
+\begin{Snippet}
+  ;; auxiliary definitions:
+
+  (define (next)
+    (machine 'set-next-instruction!
+             (+ (machine 'next-instruction) 1))
+    (execute program machine))
+\end{Snippet}
+\begin{Snippet}
+  (define (fetch-instruction)
+    (vector-ref program (machine 'next-instruction))) 
+\end{Snippet}
+\begin{Snippet}
+  (define (goto address)
+    (machine 'set-next-instruction! address)
+    (execute program machine))
+\end{Snippet}
+\begin{Snippet}
+  (define (value operand)
+    (if (register? operand)
+	(machine 'value-in operand)
+        operand))
+\end{Snippet}
+The body of the \texttt{execute} function consists of
+a dispatch over the current instruction, which explains
+what has been said earlier.
+\begin{Snippet}
+  ;; the body of `execute' begins here:
+
+  (let ((instruction (fetch-instruction)))
+    (match instruction
+      (([target-register] '<- register/value)
+       (machine 'set-memory-at!
+                (machine 'value-in target-register)
+		(value register/value))
+       (next))
+\end{Snippet}
+\begin{Snippet}
+      ((target-register '<- [source-register])
+       (machine 'set-value-in! target-register
+		(machine 'memory-at (value source-register)))
+       (next))
+\end{Snippet}
+\begin{Snippet}
+      ((target-register '<- register/value)
+       (machine 'set-value-in! target-register
+                               (value register/value))
+       (next))
+\end{Snippet}
+\begin{Snippet}
+      ((target-register '<- operand-1 op operand-2)
+       (let ((result (operation op (value operand-1)
+				   (value operand-2))))
+	 (machine 'set-value-in! target-register result)
+	 (next)))
+\end{Snippet}
+\begin{Snippet}
+      (('goto address)
+       (goto address))
+\end{Snippet}
+\begin{Snippet}
+      (('if left cmp right 'goto address)
+       (let ((result (compare cmp (value left) (value right))))
+	 (if result
+	     (goto (value address))
+         ;else
+             (next))))
+\end{Snippet}
+\begin{Snippet}
+      (('push register/value)
+       (machine 'push! (value register/value))
+       (next))
+\end{Snippet}
+\begin{Snippet}
+      (('pop register)
+       (machine 'set-value-in! register (machine 'pop!))
+       (next))
+\end{Snippet}
+\begin{Snippet}
+      (('halt)
+       machine)
+      ))) ;; the definition of `execute' ends here
+\end{Snippet}
+
+The \texttt{operation} forms a subsystem that is traditionally
+called ``the Arith\-metic-Logic Unit'' (ALU) of our machine.
+One can observe that we use the normal
+Scheme arithmetic operations to deal with numbers (however, unlike
+in Scheme, the range of numbers that can be processed by our machine
+is limited by the machine word size, and if the results of the
+arithmetic operations exceed that range, they will be silently
+truncated by our machine). As to logical operations on bits, since
+the standard Scheme does not provide them\footnote{Actually, the
+  SRFI-60 functions were eventually included in the \texttt{(rnrs arithmetic
+    bit-wise (6))} library specified in the R$^6$RS document\cite{R6RS}.},
+we resort to the \textit{Scheme Request For Implementation 60}
+extension\cite{SRFI-60}.
+
+\begin{Snippet}
+(define (operation op operand-1 operand-2)
+  (match op
+    ('+ (+ operand-1 operand-2))
+    ('* (* operand-1 operand-2))
+    ('- (- operand-1 operand-2))
+    ('/ (quotient operand-1 operand-2))
+    ('% (modulo operand-1 operand-2))
+    ('&& (bitwise-and operand-1 operand-2))
+    ('|| (bitwise-ior operand-1 operand-2))
+    ('^ (bitwise-xor operand-1 operand-2))
+    ('<< (arithmetic-shift operand-1 operand-2))
+    ('>> (arithmetic-shift operand-1 (- operand-2)))))
+\end{Snippet}
+The \texttt{compare} function also resorts to the built-in
+numerical comparison predicates of Scheme:
+\begin{Snippet}
+(define (compare comparison a b)
+  (match comparison
+    ('< (< a b))
+    ('<= (<= a b))
+    ('= (= a b))
+    ('>= (>= a b))
+    ('> (> a b))
+    ('<> (not (= a b)))))
+\end{Snippet}
+
+What is left is to explain how a machine is constructed.
+In our case, it is apparent that the machine is a stateful procedure
+(a closure) that accepts the commands \texttt{next-instruction},
+\texttt{set-next-instruction!}, \texttt{value-in}, \texttt{set\--value-in!},
+\texttt{memory-at}, \texttt{set-memory-at!}, \texttt{push!} and \texttt{pop!}.
+It should be clear that all these procedures are trivial in that all
+that they do is retrieve or modify the contents of machine memory.
+
+The procedure \texttt{make-machine} creates a new machine with specified
+parameters:
+\begin{Snippet}
+(define (make-machine registers memory)
+  (let ((registers (map (lambda (register)
+			  `(,register . 0))
+                        `(next-instruction stack-pointer
+                                           . ,registers)))
+	(stack '()))
+\end{Snippet}
+\begin{Snippet}
+    (define (this-machine . command)
+      (match command
+	(('set-memory-at! address value)
+	 (let ((bytes (machine-word-bytes value)))
+	   (for offset in 0 .. (- MACHINE-WORD-SIZE 1)
+		(bytevector-u8-set! memory (+ address offset)
+				    (list-ref bytes offset)))))
+\end{Snippet}
+\begin{Snippet}
+        (('memory-at address)
+	 (let ((bytes (map (lambda (i)
+			     (bytevector-u8-ref memory i))
+			   (range 0  (- MACHINE-WORD-SIZE 1)))))
+	   ((number/base 255) bytes)))
+\end{Snippet}
+\begin{Snippet}
+	(('set-value-in! register value)
+	 (let ((memory-cell (assoc register registers)))
+	   (set-cdr! memory-cell value)))
+\end{Snippet}
+\begin{Snippet}	
+	(('value-in register)
+	 (let (((register . value) (assoc register registers)))
+	   value))
+\end{Snippet}
+\begin{Snippet}	
+	(('next-instruction)
+	 (this-machine 'value-in 'next-instruction))
+\end{Snippet}
+\begin{Snippet}
+	(('set-next-instruction! value)
+	 (this-machine 'set-value-in! 'next-instruction value))
+\end{Snippet}
+\begin{Snippet}
+	(('push! value)
+	 (set! stack (cons value stack)))
+\end{Snippet}
+\begin{Snippet}
+	(('pop!)
+	 (let (((top . below) stack))
+	   (set! stack below)
+	   top))
+	))
+\end{Snippet}
+\begin{Snippet}
+    this-machine))
+\end{Snippet}
+
+Note that we used the \texttt{for} control structure and the
+\texttt{range} function. Although their meanings should be
+intuitive to the reader, they are not a part of the standard
+Scheme, so they are defined in the appendix
+\ref{non-standard-functions}, just like the functions
+\texttt{number/base} and \texttt{machine-word-bytes}.
+
+\subsection{A sample program}
+
+In order to execute a program on a machine, we need to have
+a program and a suitable machine.
+
+A simple program that computes a factorial function could
+look like this:
+
+\begin{Snippet}
+(define factorial
+  '#((n <- 5)            ;0
+     (acc <- 1)          ;1
+     (if n = 0 goto 6)   ;2
+     (acc <- acc * n)    ;3
+     (n <- n - 1)        ;4
+     (goto 2)            ;5
+     (halt)              ;6
+     ))
+\end{Snippet}
+
+It uses exactly two registers, called \texttt{n} and \texttt{acc}.
+It does not use any stack nor memory cells, so it can run on
+a machine with no memory (other than the registers):
+
+\begin{Snippet}
+(define tiny-machine (make-machine '(n acc) (make-bytevector 0)))
+\end{Snippet}
+
+In order to run the program on the machine, one simply has to
+type in
+
+\begin{Snippet}
+(execute factorial tiny-machine)
+\end{Snippet}
+
+After the computation terminates, the \texttt{acc} register
+contains the result (which should be retrievable using
+\texttt{(tiny-machine 'value-in 'acc)} command).
+
+\subsection{Assembler}
+
+The machine code for computing the factorial function from the
+previous section was written in a highly non-composable style,
+because it contained instructions such as \texttt{(if n = 0 goto 6)}
+or \texttt{(goto 2)} -- adding a single instruction at the beginning
+of the program would ruin the logic of the program.
+
+For this reason, it is convenient to introduce labels to mark
+certain entry points to the program. To represent the labels,
+we are going to use the extension to Scheme known as \textit{keywords},
+as defined, in the \textit{Scheme Request For Implementation 88}\cite{SRFI-88}
+document\footnote{
+  In short, keywords are similar to symbols, but they always evaluate
+  to themselves (like numbers) and hence cannot be bound to any value.
+  Their distinctive characteristic is that they end with a colon.
+}, because they do not interfere with our decision to use symbols
+to denote registers.
+
+The program for computing the factorial expressed in this position-independent
+way could look as follows:
+
+\begin{Snippet}
+   '((n <- 5)
+     (acc <- 1)
+  factorial:
+     (if n = 0 goto end:)
+     (acc <- acc * n)
+     (n <- n - 1)
+     (goto factorial:)
+  end:
+     (halt))
+\end{Snippet}
+
+We need a processor that would transform this form of programs
+into the actual machine instructions:
+
+\begin{Snippet}
+  (define (assemble position-independent-code)
+\end{Snippet}
+\begin{Snippet}
+    (define (positions+labels (line labels) instruction)
+      (if (keyword? instruction)
+        `(,line ((,instruction . ,line) . ,labels))
+      ;else
+        `(,(+ line 1) ,labels)))
+\end{Snippet}
+\begin{Snippet}
+    (let* (((_ labels) (fold-left positions+labels
+		                  '(0 ())
+			          position-independent-code))
+           (instructions (filter (lambda (line)
+                                   (not (keyword? line)))
+                                 position-independent-code))
+	   (assembled (map (lambda (instruction)
+                             (tree-map (lambda (item)
+                                         (if (keyword? item)
+			                   (assoc-ref labels item)
+                                         ;else
+				           item))
+                                       instruction))
+                           instructions)))
+      (list->vector assembled)))
+\end{Snippet}
+
+where
+
+\begin{Snippet}
+  (define (tree-map proc tree)
+    (map (lambda (item)
+	   (if (pair? item)
+	       (tree-map proc item)
+           ;else
+               (proc item)))
+         tree))
+\end{Snippet}

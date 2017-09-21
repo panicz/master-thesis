@@ -1,0 +1,95 @@
+\chapter{Y-lining} \label{Y-lining}
+
+As we noted earlier, since the definitions can in general refer
+to themselves, we ought to transform them to \texttt{lambda}
+expressions in the context of the \texttt{Z} combinator.
+However, we need to generalize it to allow an arbitrary
+number of mutually recursive functions to access one another.
+Following \cite{Harrison1997}, we can transform the programs
+like:
+
+\begin{Snippet}
+  (define even? (lambda (n)
+                  (or (= n 0)
+                      (odd? (- n 1)))))
+
+  (define odd? (lambda (n)
+                 (and (not (= n 0))
+                      (even? (- n 1)))))
+
+  (even? 5)
+\end{Snippet}
+into expressions like
+\begin{Snippet}
+  (let ((even? (lambda ((even? odd?)) even?))
+        (odd? (lambda ((even? odd?)) odd?)))
+    (let* ((combine (lambda (tuple)
+                      `(,(lambda (n)
+                          (or (= n 0)
+                              ((odd? (tuple)) (- n 1))))
+                        ,(lambda (n)
+                          (and (not (= n 0))
+                               ((even? (tuple)) (- n 1)))))))
+           ((even? odd?) (Z combine)))
+      (even? 5)))
+\end{Snippet}
+
+Or, to put it more generally, we wish to transform
+
+\begin{Snippet}
+  (define name-1 value-1)
+  (define name-2 value-2)
+  ...
+  (define name-n value-n)
+  expression
+\end{Snippet}
+
+into
+
+\begin{Snippet}
+  (let ((name-1 (lambda ((name-1 name-2 ... name-n)) name-1))
+        (name-2 (lambda ((name-1 name-2 ... name-n)) name-2))
+         ...
+        (name-n (lambda ((name-1 name-2 ... name-n)) name-n)))
+    (let* ((combine (lambda (tuple)
+                      `(,value-1* ,value-2* ... ,value-n*)))
+           ((name-1 name-2 ... name-n) ((Z combine))))
+      expression))
+\end{Snippet}
+
+where \texttt{value-i*} is obtained from \texttt{value-i} by
+replacing all references to \texttt{name-k} with expressions
+\texttt{(name-k (tuple))}. Also, the symbol \texttt{tuple}
+must not occur free in \texttt{value-k}, nor should
+\texttt{name-k} consist of the symbol \texttt{tuple}.
+
+Using the definition of \texttt{substitute} from chapter 5
+(page \pageref{substitute}), we can define the transformation
+in the following way:
+
+\begin{Snippet}
+  (define (Y-line program)
+    (match program
+      ((('define names values) ... expression)
+       (let* (((Y X T) (map unique-symbol '(Y X T)))
+	      (references (map (lambda (name)
+			         `(,name (,T)))
+			       names))
+	      (values* (map (lambda (value)
+			      (substitute names references value))
+			    values)))
+         `(let* ((,Y (lambda (f)
+		       (let ((R (lambda (g)
+				  (lambda ()
+				    (f (g g))))))
+		         (R R))))
+	         ,@(map (lambda (name)
+			  `(,name (lambda (,names) ,name)))
+		        names)
+	         (,X (lambda (,T) (list . ,values*)))
+	         (,names ((,Y ,X))))
+	    ,expression)))))
+\end{Snippet}
+
+Needless to say, the programs obtained this way are terribly
+inefficient.

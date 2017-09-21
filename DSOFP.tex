@@ -1,0 +1,212 @@
+\documentclass[a4paper,11pt]{book}
+\usepackage{etoolbox}
+\apptocmd{\thebibliography}{\csname phantomsection\endcsname\addcontentsline{toc}{chapter}{\bibname}}{}{}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage[english]{babel}
+\usepackage{fancyvrb}
+\usepackage{mathtools}
+\usepackage{qtree}
+\usepackage{pgfplots}
+\usepackage{listings}
+\usepackage{clrscode3e}
+\usepackage{bbm}
+\usepackage{MnSymbol}
+\usepackage{multicol}
+\usepackage{appendix}
+\usepackage[
+  type={CC},
+  modifier={by-sa},
+  version={4.0}
+]{doclicense}
+
+
+\newenvironment{Snippet}{\Verbatim[samepage=true]}{\endVerbatim}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 'dedication' environment: To add a dedication paragraph 
+% at the start% of book
+% Source: http://www.tug.org/pipermail/texhax/2010-June/015184.html
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newenvironment{dedication}
+{
+   \cleardoublepage
+   \thispagestyle{empty}
+   \vspace*{\stretch{1}}
+   \hfill\begin{minipage}[t]{0.66\textwidth}
+   \raggedright
+}
+{
+   \end{minipage}
+   \vspace*{\stretch{3}}
+   \clearpage
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Chapter quote at the start of chapter        %
+% Source: http://tex.stackexchange.com/a/53380 %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\makeatletter
+\renewcommand{\@chapapp}{}% Not necessary...
+\newenvironment{chapquote}[2][2em]
+  {\setlength{\@tempdima}{#1}%
+   \def\chapquote@author{#2}%
+   \parshape 1 \@tempdima \dimexpr\textwidth-2\@tempdima\relax%
+   \itshape}
+  {\par\normalfont\hfill--\ \chapquote@author\hspace*{\@tempdima}\par\bigskip}
+\makeatother
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% First page of book which contains 'stuff' like: %
+%  - Book title, subtitle                         %
+%  - Book author name                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\renewcommand\maketitle{%
+  \begin{titlepage}%
+    \let\footnotesize\small
+    \let\footnoterule\relax
+    \begin{center}%
+      {\large \textbf{UNIWERSYTET GDAŃSKI\\
+  Wydział Matematyki, Fizyki i Informatyki}\par}
+      \par 
+    \end{center}%
+     \vspace{1cm plus 1fill} 
+     \begin{flushleft}%
+      {{\Large \textbf{Maciej Godek}} \\ nr albumu: 181131\par}
+    \end{flushleft}%
+     \vspace{8mm plus 1mm minus 2mm}
+    \begin{center}%
+      {\huge\textbf{Data Structure Optimization\\for Functional Programs}\par}
+      \vspace{2cm plus 1.5fill}
+      \begin{flushright}\large
+        \begin{tabular}{l}
+          Praca magisterska na kierunku:\\[3pt]
+          \MakeUppercase{Informatyka}\\[3pt]
+          Promotor: \\[3pt]
+          \bfseries dr hab. prof. UG Christoph Schwarzweller
+        \end{tabular}
+      \end{flushright}
+      \vspace{15mm plus .1fill}
+      {\large Gdańsk\space 2017\par}
+    \end{center}
+  \end{titlepage}%
+  %
+  \setcounter{footnote}{0}%
+  \global\let\thanks\relax
+  \global\let\maketitle\relax
+  %\global\let\@author\@empty
+  %\global\let\@date\@empty
+  %\global\let\@title\@empty
+  \global\let\title\relax
+  \global\let\author\relax
+  \global\let\date\relax
+  \global\let\and\relax
+} %% --renewcommand: maketitle --
+
+\def\oswiadczenieText{%
+Ja, niżej podpisany oświadczam, że przedłożona praca 
+dyplomowa została wykonana przeze mnie samodzielnie, 
+nie narusza praw autorskich, interesów prawnych 
+i~materialnych innych osób.\endgraf }
+
+
+%
+% Book's title and subtitle
+%\title{\Huge \textbf{Data Structure Optimization for Functional Programs}}
+% Author
+%\author{\textsc{Maciej Godek}
+%  \\
+%  \\
+%\small{supervised by \textsc{Christoph Schwarzweller}} }
+%
+
+
+\begin{document}
+
+\frontmatter
+\maketitle
+\thispagestyle{empty}
+\doclicenseThis
+\clearpage
+
+%\thispagestyle{empty}
+%\input{chapters/abstract-pl.tex}
+%\clearpage
+
+\thispagestyle{empty}
+\input{chapters/abstract-en.tex}
+
+\clearpage
+\thispagestyle{empty}
+
+%\input{chapters/statement.tex}
+
+%\thispagestyle{empty}
+
+%\clearpage
+%\thispagestyle{empty}
+%\clearpage
+
+\thispagestyle{plain}
+%\par\vspace*{.35\textheight}{\centering A dedication TBD.\par}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Auto-generated table of contents, list of figures and list of tables
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\tableofcontents
+
+\mainmatter
+
+%\input{chapters/0.tex}
+
+\input{chapters/1.tex}
+
+\part{The Organon}
+
+\input{chapters/2.tex}
+
+\input{chapters/3.tex}
+
+\input{chapters/4.tex}
+
+\input{chapters/5.tex}
+
+\part{The Substance}
+
+\input{chapters/6.tex}
+
+\input{chapters/7.tex}
+
+\part{Appendices}
+
+\begin{appendices}
+
+% Non-standard functions
+\input{chapters/A.tex}
+
+% alpha-conversion ?
+
+% Y-lining
+\input{chapters/B.tex}
+
+% Macro expansion
+
+\input{chapters/C.tex}
+
+% Hudak's quicksort
+\input{chapters/D.tex}
+
+% CPS conversion
+\input{chapters/E.tex}
+
+% Overriding the core forms of Scheme
+\input{chapters/F.tex}
+
+\end{appendices}
+  
+\input{chapters/bib.tex}
+
+\end{document}
