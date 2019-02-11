@@ -48,8 +48,8 @@ instructions\footnote{Note that we use a new register to hold the
 \begin{Snippet}
   (bb <- b * b)
   (ac <- a * c)
-  (4ac <- 4 * x2)
-  (bb-4ac <- x1 - x3)
+  (4ac <- 4 * ac)
+  (bb-4ac <- bb - 4ac)
 \end{Snippet}
 
 Let us now ask the opposite question: given a sequence of machine
