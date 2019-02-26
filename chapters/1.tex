@@ -30,12 +30,12 @@ communicating algorithms between programmers of different machines.
 For this reason, the FORTRAN and ALGOL families of languages were invented
 as means of conveying the ideas of specific algorithms in a precise
 and uniform manner\cite{Sebesta2008}. In addition, tools existed that allowed
-to run programs written in those languages on real machines, although with
+programs written in those languages to be run on real machines, although with
 some performance penalty -- therefore, for performance-critical applications,
 programmers were still writing machine code\cite{Victor2013}.
 
 What those languages had in common is that their main purpose was
-to instruct computer how to perform computations. In addition,
+to instruct a computer how to perform computations. In addition,
 the means of expression of those languages were designed, so that
 they could easily be translated directly to machine code of most CPUs.
 With time, however, the way of thinking about computers had changed
@@ -49,8 +49,8 @@ and the old ways of thinking were often insufficient for managing that
 complexity.
 
 As the performance of computers was improving, our requirements
-with regard to programming systems begun to shift. For many applications
-it was no longer necessary to get the maximum performance of every
+with regard to programming systems began to shift. For many applications
+it was no longer necessary to get the maximum performance out of every
 CPU cycle, as there were other factors, such as network latency, that
 bounded the overall performance of the application.
 
@@ -98,7 +98,7 @@ can prevent a programmer from using it in an obscure way, and therefore
 in addition to the use of appropriate means of expression, programmers
 need to obey a certain discipline, or a set of conventions. Needless
 to say, the conventions themselves should be clear and simple to follow,
-in order to avoid their misinterpretations.
+in order to avoid their misinterpretation.
 
 One could ask whether it would be a good idea to use some natural language,
 such as English, to express computer programs. The big advantage of this
@@ -112,7 +112,7 @@ tend to be vague, verbose, imprecise and structurally ambiguous\footnote{
   in our native tongues —be it Dutch, English, American, French, German,
   or Swahili— are as damned difficult to make as they would be to
   use''\cite{Dijkstra1997}}.
-People realized this fact long before the computer has been conceived, and this
+People realized this fact long before the computer had been conceived, and this
 realization was reflected in the development of the language of mathematics,
 which has complementary advantages to those of natural languages: it is
 usually brief, non-ambiguous and precise\footnote{However, certain problems
@@ -120,7 +120,7 @@ usually brief, non-ambiguous and precise\footnote{However, certain problems
   physics have been pointed out Gerald Sussman, who proposed to use a programming
   language for that purpose instead\cite{SICM}.}.
 
-Mark Turner and Gilles Fauconnier, the authors of an important cognitive science
+Mark Turner and Gilles Fauconnier, the authors of an important cognitive-science
 book ``The Way We Think'', noted that
 
 \begin{quote}
@@ -221,7 +221,7 @@ that Clark Kent is Superman}, despite the fact, that both
 \emph{Clark Kent} and \emph{Superman} refer to the same entity).
 
 The programming style that employs referential transparency
-is called \emph{functional programming}, and it allows to
+is called \emph{functional programming}, and it allows one to
 comprehend the code in terms of the \emph{substitution model
   of computation}\cite{SICP}.
 
@@ -257,7 +257,7 @@ context\footnote{The author remembers the following riddle from his
   shadowed by some new meanings, that referred to the old meanings.
 }.
 
-However, the same function can be defined in a referentially transparent
+However, the same function can be defined in a referentially-transparent
 manner with the use of recursion:
 
 \begin{Snippet}
@@ -270,7 +270,7 @@ manner with the use of recursion:
 
 Since no variable assignment appears in the code, we can evaluate, say,
 the expression \texttt{factorial(5)} by substituting the references
-to function at given points with their values at that point:
+to a function at given points with their values at that point:
 
 \begin{Snippet}
   >>> factorial(5)
@@ -288,7 +288,7 @@ modular and reusable than their imperative counterparts. From the
 point of view of software engineering, they allow only a single way
 of passing information, namely -- either by providing it as arguments to
 functions, or collecting it from functions' results. The lack of
-assignment doesn't allow to pass information through global variables,
+assignment doesn't allow the passing of information through global variables,
 for instance, which results in cleaner systems that are easier
 to maintain. Also, if programs are written with pure functions,
 the order of their evaluation doesn't matter (due to the
@@ -350,15 +350,15 @@ in functional programming\cite{Bagwell2002}, which -- in conjunction
 with the technique of garbage collection (also pioneered by McCarthy)
 allowed to develop programs devoid of state mutation.
 
-Unfortunately, singly linked lists have some undesired properties
-that disqualify them in a number of applications. For example,
+Unfortunately, singly linked lists have some undesireable properties
+that disqualify them from a number of applications. For example,
 the access time to a random element is linear (as opposed to
-constant, as it is the case for arrays), similarly to calculating
+constant, as it is in the case of arrays), similarly to calculating
 the length of a list. Furthermore, modern CPUs are optimized
 to process data that is organized in vectors, and the non-locality
-of link reference operation may contribute to an increased number
-of cache misses, left alone the doubled memory consumption
-caused by the need to store additional pointer along with each
+of link reference operations may contribute to an increased number
+of cache misses, let alone the doubled memory consumption
+caused by the need to store an additional pointer along with each
 element of the list.
 
 For a long time, those deficiencies prevented functional programming
@@ -463,7 +463,7 @@ However, we can perceive the Haskell program as a sort of a section through
 its imperative counterpart. In particular, it should be possible
 to mechanically transform certain classes of functional programs so
 that they would use arrays instead of lists, and reuse previously allocated
-storage instead of allocating new one. This is what this work is going to
+storage instead of allocating new storage. This is what this work is going to
 be about.
 
 \section{Structure of this work}
@@ -475,7 +475,7 @@ chapter 2 describes the source programming language that we wish to use
 for expressing our programs, and chapter 3 proposes a simple register
 machine model and its instruction set, which is the target of our
 transformations/optimizations. In chapter 4, we present a general
-transformation which allows to execute programs in our source
+transformation which allows the execution of programs in our source
 language on the target machine (this transformation is traditionally
 called \textit{compilation}). Chapter 5 gives an overview of a
 system for reasoning about programs expressed in (a subset of)
@@ -483,7 +483,7 @@ the source language.
 
 In the second part, we develop some techniques for optimizing
 various classes of programs. In chapter 6, we develop a technique
-that allows to transform various basic functions that operate on
+that allows transformation of various basic functions that operate on
 lists into procedures operating on arrays. Chapter 7 deals mostly
 with Quicksort, and although it fails to deliver working solutions,
 we hope that it at least arrives at some valuable conclusions.
@@ -498,7 +498,7 @@ almost certainly contain some bugs).
 All the code is written using the Scheme programming language.
 We've heard that some people find it difficult to comprehend
 the programs written in that language because of the multitude
-of parentheses that can be used in some more complex expressions.
+of parentheses that can be used in some of the more complex expressions.
 In our hope that the hesitant readers overcome their repulsion,
 we assure that the code is indented in a way that was supposed
 to facilitate the comprehension of the programs, rather than
@@ -530,9 +530,9 @@ appears in \cite{FutamuraKonishiGluck2001}, and is -- to an extent
 -- explored in \cite{BurstallDarlington1977}.
 
 An alternative approach to the problem of tackling data structures
-in functional program -- not by transforming the programs, but
+in functional programs -- not by transforming the programs, but
 by designing the data structures in such a way that makes them
-more suitable in immutable setup -- can be found in \cite{Okasaki1996}
+more suitable in an immutable setup -- can be found in \cite{Okasaki1996}
 and \cite{Bagwell2002} (among others).
 
 \section{Acknowledgements}
